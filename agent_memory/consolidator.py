@@ -58,7 +58,7 @@ class MemoryConsolidator:
             return stats
 
         # 1. Abstract methodologies
-        new_methods = self._abstract_methodologies()
+        new_methods = self._abstract_methodologies(batch_size=batch_size)
         stats["methodologies_created"] = len(new_methods)
 
         # 2. Merge similar nodes
@@ -75,7 +75,7 @@ class MemoryConsolidator:
         logger.info(f"Consolidation complete: {stats}")
         return stats
 
-    def _abstract_methodologies(self) -> List[Methodology]:
+    def _abstract_methodologies(self, batch_size: int = 100) -> List[Methodology]:
         """
         Abstract methodologies from successful error recovery fragments.
 
@@ -90,10 +90,10 @@ class MemoryConsolidator:
         WHERE f.fragment_type = 'error_recovery'
         RETURN f
         ORDER BY f.outcome DESC
-        LIMIT 100
+        LIMIT $limit
         """
 
-        results = self.store.execute_query(query)
+        results = self.store.execute_query(query, {"limit": max(1, batch_size)})
         fragments = [Fragment.from_dict(r["f"]) for r in results if "f" in r]
 
         if not fragments:
@@ -210,7 +210,8 @@ class MemoryConsolidator:
         action_str = ", ".join(list(dict.fromkeys(actions))[:5])
 
         # Create situation description
-        situation = f"When encountering errors similar to: {group[0].description[:100]}"
+        phase = self._infer_phase_from_group(group)
+        situation = f"phase:{phase} | When encountering errors similar to: {group[0].description[:100]}"
 
         # Create strategy
         strategy = f"Apply action sequence: {action_str}"
@@ -224,6 +225,23 @@ class MemoryConsolidator:
             failure_count=0,
             source_fragment_ids=[f.id for f in group],
         )
+
+    def _infer_phase_from_group(self, group: List[Fragment]) -> str:
+        """Infer likely workflow phase from fragment content."""
+        if not group:
+            return "fixing"
+
+        actions = [a.lower() for frag in group for a in frag.action_sequence]
+
+        if any(a in {"test", "pytest", "unittest"} for a in actions):
+            return "testing"
+        if any(a in {"edit", "write", "patch"} for a in actions):
+            return "fixing"
+        if any(a in {"search", "grep", "find", "open"} for a in actions):
+            return "locating"
+        if any(f.fragment_type == "exploration" for f in group):
+            return "understanding"
+        return "fixing"
 
     def _link_methodology_to_errors(
         self,
@@ -267,8 +285,11 @@ class MemoryConsolidator:
             # Merge m2 into m1
             merge_query = """
             MATCH (m1:Methodology {id: $id1}), (m2:Methodology {id: $id2})
+            OPTIONAL MATCH (e:ErrorPattern)-[:RESOLVED_BY]->(m2)
+            WITH m1, m2, collect(DISTINCT e) AS errors
             SET m1.success_count = m1.success_count + m2.success_count,
                 m1.failure_count = m1.failure_count + m2.failure_count
+            FOREACH (e IN errors | MERGE (e)-[:RESOLVED_BY]->(m1))
             DETACH DELETE m2
             """
             self.store.execute_write(merge_query, {"id1": r["id1"], "id2": r["id2"]})
@@ -304,9 +325,9 @@ class MemoryConsolidator:
         MATCH (m:Methodology)
         WHERE m.confidence < 0.2
           AND m.success_count + m.failure_count > 5
-        WITH m, count(m) as cnt
-        DETACH DELETE m
-        RETURN cnt
+        WITH collect(m) AS ms
+        FOREACH (m IN ms | DETACH DELETE m)
+        RETURN size(ms) AS cnt
         """
 
         try:

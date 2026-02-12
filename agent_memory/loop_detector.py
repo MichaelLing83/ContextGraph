@@ -37,15 +37,6 @@ class LoopSignature:
 
         return len(overlap) >= 1
 
-    def __hash__(self):
-        return hash((self.action_type, self.error_category, tuple(sorted(self.error_keywords))))
-
-    def __eq__(self, other):
-        if not isinstance(other, LoopSignature):
-            return False
-        return self.matches(other)
-
-
 @dataclass
 class LoopInfo:
     """Information about a detected loop."""

@@ -53,6 +53,21 @@ class TestLoopSignature:
         )
         assert not sig1.matches(sig2)  # No keyword overlap
 
+    def test_signature_equality_is_strict(self):
+        """Equality should stay strict while fuzzy comparison uses matches()."""
+        sig1 = LoopSignature(
+            action_type="edit",
+            error_category="ImportError",
+            error_keywords=["cannot", "import"],
+        )
+        sig2 = LoopSignature(
+            action_type="edit",
+            error_category="ImportError",
+            error_keywords=["cannot"],
+        )
+        assert sig1 != sig2
+        assert sig1.matches(sig2)
+
 
 class TestLoopDetector:
     def test_detects_simple_loop(self):

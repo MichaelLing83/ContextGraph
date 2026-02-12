@@ -132,13 +132,17 @@ class MemoryRetriever:
 
         query = """
         MATCH (m:Methodology)
-        WHERE m.situation CONTAINS $phase
+        WHERE m.situation CONTAINS $phase_marker
+           OR m.situation CONTAINS $phase
         RETURN m
         ORDER BY m.confidence DESC
         LIMIT 5
         """
 
-        results = self.store.execute_query(query, {"phase": state.phase})
+        results = self.store.execute_query(query, {
+            "phase": state.phase,
+            "phase_marker": f"phase:{state.phase}",
+        })
         return [self._dict_to_methodology(r["m"]) for r in results if "m" in r]
 
     def by_semantic(
@@ -150,7 +154,7 @@ class MemoryRetriever:
         if not self.store:
             return []
 
-        # Neo4j vector search (requires vector index)
+        # Neo4j vector search (requires Neo4j GDS plugin for gds.similarity.cosine)
         query = """
         MATCH (f:Fragment)
         WHERE f.embedding IS NOT NULL

@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Dict, Any
 from datetime import datetime
+import re
 
 
 @dataclass
@@ -131,7 +132,6 @@ class State:
 
     def _extract_error_type(self, error_msg: str) -> str:
         """Extract error type from error message."""
-        import re
         # Match common Python error patterns
         match = re.search(r'(\w+Error|\w+Exception|FAIL|ERROR)', error_msg)
         return match.group(1) if match else "Unknown"

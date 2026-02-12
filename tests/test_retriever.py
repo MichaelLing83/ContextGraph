@@ -81,3 +81,26 @@ class TestMemoryRetriever:
         params = captured["parameters"]
         assert params["task_description"] == "fix import error in parser module"
         assert params["repo_summary"] == "a python parser repository"
+
+    def test_by_state_uses_phase_marker(self):
+        """Test by_state query parameters include phase marker for generated methodologies."""
+        captured = {}
+
+        class DummyStore:
+            def execute_query(self, query, parameters=None):
+                captured["query"] = query
+                captured["parameters"] = parameters or {}
+                return []
+
+        retriever = MemoryRetriever(store=DummyStore(), embedder=None)
+        state = State(
+            tools=["bash"],
+            repo_summary="repo",
+            task_description="task",
+            current_error="",
+            phase="fixing",
+        )
+        retriever.by_state(state)
+
+        assert captured["parameters"]["phase"] == "fixing"
+        assert captured["parameters"]["phase_marker"] == "phase:fixing"

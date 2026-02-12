@@ -1,5 +1,7 @@
 """Tests for MemoryWriter."""
 
+import pytest
+
 from agent_memory.writer import MemoryWriter, RawTrajectory
 
 
@@ -26,6 +28,61 @@ class TestMemoryWriter:
         fragments = writer._segment_into_fragments(raw)
 
         assert len(fragments) >= 1
+
+    @pytest.mark.parametrize(
+        "steps,success,expected_final_type",
+        [
+            # No errors: final fragment should be successful_fix when overall run succeeds.
+            (
+                [
+                    {"action": "search", "observation": "Looking for target file"},
+                    {"action": "open", "observation": "Opened file.py"},
+                    {"action": "edit", "observation": "Applied local change"},
+                    {"action": "test", "observation": "All tests pass"},
+                ],
+                True,
+                "successful_fix",
+            ),
+            # Error state never recovers: final fragment should stay failed_attempt.
+            (
+                [
+                    {"action": "search", "observation": "Found file.py"},
+                    {"action": "edit", "observation": "ImportError: cannot import name Foo"},
+                    {"action": "edit", "observation": "TypeError: still broken"},
+                    {"action": "test", "observation": "ValueError: still failing"},
+                ],
+                True,
+                "failed_attempt",
+            ),
+            # Failed run with partial recovery should not end as successful_fix.
+            (
+                [
+                    {"action": "search", "observation": "Found file.py"},
+                    {"action": "edit", "observation": "ImportError: cannot import name Foo"},
+                    {"action": "edit", "observation": "Applied import fix"},
+                    {"action": "test", "observation": "Some tests did not pass"},
+                ],
+                False,
+                "exploration",
+            ),
+        ],
+    )
+    def test_segment_into_fragments_edge_cases(self, steps, success, expected_final_type):
+        """Test segmentation boundary conditions around error recovery and run success."""
+        writer = MemoryWriter(store=None, embedder=None)
+        raw = RawTrajectory(
+            instance_id="edge__test-123",
+            repo="test/repo",
+            success=success,
+            steps=steps,
+        )
+
+        fragments = writer._segment_into_fragments(raw)
+        assert fragments
+        assert fragments[-1].fragment_type == expected_final_type
+
+        if not success:
+            assert fragments[-1].fragment_type != "successful_fix"
 
     def test_extract_error_patterns(self):
         """Test error pattern extraction."""
