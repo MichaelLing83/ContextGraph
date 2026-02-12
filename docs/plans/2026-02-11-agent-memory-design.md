@@ -12,7 +12,7 @@ Agent 的长期记忆系统。每条轨迹都会更新记忆，每次 Agent 运�
 | 记忆粒度 | 分层：轨迹摘要 + 关键片段 |
 | 检索维度 | 多维：错误 / 任务 / 状态 / 语义 |
 | 存储方式 | Neo4j 图数据库 |
-| 语义匹配 | API embedding (OpenAI/Anthropic) |
+| 语义匹配 | API embedding（当前 OpenAI；Anthropic 作为后续扩展） |
 | 更新策略 | 增量写入 + 每 16 条轨迹定期整理 |
 | 方法论格式 | 自然语言（可插拔接口，方便 ablation） |
 
@@ -28,15 +28,11 @@ Agent 的长期记忆系统。每条轨迹都会更新记忆，每次 Agent 运�
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │                    Neo4j Graph Store                      │   │
 │  │                                                           │   │
-│  │   [Trajectory]──has_fragment──>[Fragment]                │   │
-│  │        │                            │                     │   │
-│  │   has_state                    has_error                 │   │
-│  │        ↓                            ↓                     │   │
-│  │   [State]                      [ErrorPattern]            │   │
-│  │        │                            │                     │   │
-│  │   solved_by                   resolved_by                │   │
-│  │        ↓                            ↓                     │   │
-│  │   [Methodology]←───derived_from───[Fragment]             │   │
+│  │   [Trajectory]──HAS_FRAGMENT──>[Fragment]                │   │
+│  │                                  │                       │   │
+│  │                                  └──CAUSED_ERROR──>[ErrorPattern] │   │
+│  │                                                           │   │
+│  │                      [Methodology]<──RESOLVED_BY──────────┘   │   │
 │  │                                                           │   │
 │  └──────────────────────────────────────────────────────────┘   │
 │                              │                                   │
@@ -51,7 +47,7 @@ Agent 的长期记忆系统。每条轨迹都会更新记忆，每次 Agent 运�
 ```
 
 **三个核心组件**：
-1. **Writer** - 轨迹结束后立即写入原始记录（Trajectory + Fragments + States）
+1. **Writer** - 轨迹结束后立即写入原始记录（Trajectory + Fragments + ErrorPatterns；State 仅运行时构建）
 2. **Retriever** - 运行时多维检索（错误/任务/状态/语义）
 3. **Consolidator** - 每 16 条轨迹执行整理（抽象方法论、合并相似、更新统计、清理低质量）
 
@@ -82,7 +78,7 @@ class Fragment:
     id: str
     step_range: Tuple[int, int]   # 起止步骤
     fragment_type: str            # error_recovery / exploration /
-                                  # successful_fix / failed_attempt
+                                  # successful_fix / failed_attempt / loop
     description: str              # 自然语言描述
     action_sequence: List[str]    # 动作序列
     outcome: str                  # 结果
@@ -101,6 +97,8 @@ class State:
     phase: str                # understanding / locating / fixing
     embedding: List[float]
 ```
+
+> 注：当前实现中 `State` 主要作为检索输入的运行时快照，不在 Neo4j 中持久化为节点。
 
 ### Methodology（方法论）
 
@@ -124,36 +122,19 @@ class Methodology:
 
 ```
 Trajectory ──HAS_FRAGMENT──> Fragment
-    │                            │
-    │                            ├──AT_STATE──> State
-    │                            │
-    │                            ├──ENCOUNTERED──> ErrorPattern
-    │                            │
-    │                            └──LED_TO──> Fragment (下一片段)
-    │
-    └──IN_REPO──> Repository
-
-
-Fragment ──SIMILAR_TO──> Fragment         # 相似片段 (语义)
-
-Fragment ──DERIVED──> Methodology         # 抽象来源
-
-Methodology ──APPLIES_TO──> State         # 适用状态
-
-ErrorPattern ──OFTEN_CAUSED_BY──> ErrorPattern  # 错误链
-
-ErrorPattern ──RESOLVED_BY──> Methodology       # 解决方案
+Fragment ──CAUSED_ERROR──> ErrorPattern
+ErrorPattern ──RESOLVED_BY──> Methodology
 ```
+
+> 当前已实现的持久化关系为以上三类。`State` 仍用于检索输入，但暂未持久化为图节点关系。
 
 ### 关系属性
 
 | 关系 | 属性 |
 |------|------|
 | `HAS_FRAGMENT` | order (顺序) |
-| `LED_TO` | success (是否成功转换) |
-| `SIMILAR_TO` | similarity (相似度 0-1) |
+| `CAUSED_ERROR` | （当前无额外属性） |
 | `RESOLVED_BY` | success_rate, avg_steps |
-| `OFTEN_CAUSED_BY` | frequency (出现频次) |
 
 ---
 
@@ -181,7 +162,7 @@ class MemoryWriter:
         - 遇到错误 → 开始新片段
         - 错误恢复成功 → 结束片段
         - 切换任务阶段 → 新片段
-        - 连续相同动作 3+ 次 → 标记为 loop_fragment
+        - 连续相同动作 3+ 次 → 标记为 loop
         """
 
     def _extract_state_at_step(self, trajectory, step: int) -> State:
@@ -236,9 +217,9 @@ class MemoryRetriever:
     def by_state(self, state: State) -> List[Methodology]:
         """
         状态驱动检索：
-        MATCH (m:Methodology)-[:APPLIES_TO]->(s:State)
-        WHERE s.phase = $phase AND s.tools = $tools
-        RETURN m
+        MATCH (m:Methodology)
+        WHERE m.situation CONTAINS $phase
+        RETURN m ORDER BY m.confidence DESC LIMIT 5
         """
 
     def by_semantic(self, query_embedding: List[float], node_type: str) -> List[Node]:
@@ -290,7 +271,7 @@ class MemoryConsolidator:
             - 适用情境：...
             - 建议策略：..."
 
-        4. 创建 Methodology 节点，连接来源 Fragments
+        4. 创建 Methodology 节点，并通过 ErrorPattern 建立 `RESOLVED_BY` 关联
         """
 
     def _merge_similar_nodes(self, similarity_threshold: float = 0.9):
@@ -305,7 +286,7 @@ class MemoryConsolidator:
         """
         更新关系上的统计属性：
         - RESOLVED_BY.success_rate = 成功次数 / 总次数
-        - OFTEN_CAUSED_BY.frequency = 共现次数
+        - ErrorPattern.frequency = 与 Fragment 的 `CAUSED_ERROR` 关联计数
         - Methodology.confidence = 基于来源数量和成功率
         """
 
@@ -383,23 +364,24 @@ class StatisticsEngine:
         """
         什么错误最常见：
         MATCH (e:ErrorPattern)
-        RETURN e.type, count(*) ORDER BY count DESC
+        RETURN e.error_type, count(*) ORDER BY count DESC
         """
 
     def get_error_transitions(self) -> Dict[str, Dict[str, float]]:
         """
-        错误转移概率（A 错误后经常出现 B 错误）：
-        MATCH (e1:ErrorPattern)-[:OFTEN_CAUSED_BY]->(e2:ErrorPattern)
-        RETURN e1.type, e2.type, rel.frequency
+        当前实现先支持错误频次统计（转移关系可作为后续扩展）：
+        MATCH (f:Fragment)-[:CAUSED_ERROR]->(e:ErrorPattern)
+        RETURN e.error_type, count(f) AS frequency
 
-        返回: {"ImportError": {"ModuleNotFoundError": 0.3, "SyntaxError": 0.1}}
+        返回: {"ImportError": 12, "TypeError": 7}
         """
 
     def get_common_mistakes(self, situation: str) -> List[MistakePattern]:
         """
         某情境下的常见错误：
-        MATCH (f:Fragment)-[:AT_STATE]->(s:State)
-        WHERE f.outcome = 'failed' AND s.situation CONTAINS $situation
+        MATCH (t:Trajectory)-[:HAS_FRAGMENT]->(f:Fragment)
+        WHERE f.outcome = 'failed'
+          AND toLower(coalesce(t.summary, '')) CONTAINS toLower($situation)
         RETURN f.description, count(*) as freq
         ORDER BY freq DESC LIMIT 10
         """
@@ -418,7 +400,7 @@ class StatisticsEngine:
         """
         批量更新统计：
         1. 更新 ErrorPattern 节点的 count
-        2. 更新 OFTEN_CAUSED_BY 边的 frequency
+        2. 基于 `CAUSED_ERROR` 关系更新 ErrorPattern.frequency
         3. 重新计算 RESOLVED_BY.success_rate
         """
 ```

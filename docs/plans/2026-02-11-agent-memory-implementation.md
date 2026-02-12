@@ -1,12 +1,12 @@
 # Agent Memory (ContextGraph V2) Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **Execution note:** Follow tasks sequentially and use test-driven iteration (red -> green -> refactor).
 
 **Goal:** Build a Neo4j-backed long-term memory system for coding agents that learns from trajectories, detects loops based on error consistency, and provides multi-dimensional retrieval.
 
 **Architecture:** Hierarchical memory with Trajectory summaries and key Fragments. Writer handles incremental ingestion, Retriever provides 4-dimensional search (error/task/state/semantic), Consolidator runs every 16 trajectories to abstract methodologies and merge similar nodes.
 
-**Tech Stack:** Python 3.10+, Neo4j, OpenAI/Anthropic embedding API, dataclasses, pytest
+**Tech Stack:** Python 3.10+, Neo4j, OpenAI embedding API (Anthropic as future extension), dataclasses, pytest
 
 ---
 
@@ -138,7 +138,7 @@ class TestTrajectory:
 **Step 2: Run test to verify it fails**
 
 ```bash
-cd /Volumes/Mac_Ext/link_cache/codes/ContextGraph/.worktrees/agent-memory
+cd <repo-root>
 python -m pytest tests/test_models.py -v
 ```
 
@@ -898,9 +898,10 @@ git commit -m "feat: add Neo4jStore connection manager"
 # Add to tests/test_neo4j_store.py
 
 class TestNeo4jSchema:
-    @pytest.mark.skipif("skip_neo4j")
-    def test_init_schema(self, neo4j_uri, neo4j_auth):
+    def test_init_schema(self, neo4j_uri, neo4j_auth, neo4j_available):
         """Test schema initialization creates constraints and indexes."""
+        if not neo4j_available:
+            pytest.skip("Neo4j not available")
         with Neo4jStore(uri=neo4j_uri, auth=neo4j_auth) as store:
             store.init_schema()
             # Verify constraints exist
@@ -928,7 +929,7 @@ Expected: FAIL
             # Uniqueness constraints
             "CREATE CONSTRAINT trajectory_id IF NOT EXISTS FOR (t:Trajectory) REQUIRE t.id IS UNIQUE",
             "CREATE CONSTRAINT fragment_id IF NOT EXISTS FOR (f:Fragment) REQUIRE f.id IS UNIQUE",
-            "CREATE CONSTRAINT state_id IF NOT EXISTS FOR (s:State) REQUIRE s.id IS UNIQUE",
+            # Note: State nodes are runtime context and are not persisted with id
             "CREATE CONSTRAINT methodology_id IF NOT EXISTS FOR (m:Methodology) REQUIRE m.id IS UNIQUE",
             "CREATE CONSTRAINT error_pattern_id IF NOT EXISTS FOR (e:ErrorPattern) REQUIRE e.id IS UNIQUE",
 
@@ -989,9 +990,10 @@ from agent_memory.models import Trajectory, Fragment, Methodology
 
 
 class TestNeo4jNodeOperations:
-    @pytest.mark.skipif("skip_neo4j")
-    def test_create_trajectory_node(self, neo4j_uri, neo4j_auth):
+    def test_create_trajectory_node(self, neo4j_uri, neo4j_auth, neo4j_available):
         """Test creating a Trajectory node."""
+        if not neo4j_available:
+            pytest.skip("Neo4j not available")
         with Neo4jStore(uri=neo4j_uri, auth=neo4j_auth) as store:
             store.init_schema()
 
@@ -1113,7 +1115,7 @@ Expected: FAIL
             e.frequency = $frequency
         ON MATCH SET
             e.error_keywords = e.error_keywords + [kw IN $error_keywords WHERE NOT kw IN e.error_keywords],
-            e.frequency = e.frequency + 1
+            e.frequency = e.frequency + $frequency
         """
         self.execute_write(query, error_pattern.to_dict())
 ```
@@ -2100,10 +2102,11 @@ class TestMemoryRetriever:
         """Test error-based query generation."""
         retriever = MemoryRetriever(store=None, embedder=None)
 
-        query = retriever._build_error_query("ImportError", "cannot import name")
+        query, params = retriever._build_error_query("ImportError")
 
-        assert "ImportError" in query
+        assert "error_type" in query
         assert "ErrorPattern" in query or "Methodology" in query
+        assert params.get("error_type") == "ImportError"
 ```
 
 **Step 2: Run test to verify it fails**
@@ -2210,12 +2213,10 @@ class MemoryRetriever:
         if not self.store:
             return []
 
-        query = self._build_error_query(
-            error_type=self._extract_error_type(error_message),
-            error_message=error_message,
-        )
+        error_type = self._extract_error_type(error_message)
+        query, params = self._build_error_query(error_type)
 
-        results = self.store.execute_query(query)
+        results = self.store.execute_query(query, params)
         return [self._dict_to_methodology(r["m"]) for r in results if "m" in r]
 
     def by_task(
@@ -2283,23 +2284,25 @@ class MemoryRetriever:
             logger.warning(f"Semantic search failed: {e}")
             return []
 
-    def _build_error_query(self, error_type: Optional[str], error_message: str) -> str:
+    def _build_error_query(self, error_type: Optional[str]) -> tuple:
         """Build Cypher query for error-based retrieval."""
         if error_type:
-            return f"""
-            MATCH (e:ErrorPattern {{error_type: '{error_type}'}})-[:RESOLVED_BY]->(m:Methodology)
+            query = """
+            MATCH (e:ErrorPattern {error_type: $error_type})-[:RESOLVED_BY]->(m:Methodology)
             RETURN m
             ORDER BY m.confidence DESC
             LIMIT 5
             """
+            return query, {"error_type": error_type}
         else:
-            return """
+            query = """
             MATCH (m:Methodology)
             WHERE m.situation CONTAINS 'error'
             RETURN m
             ORDER BY m.confidence DESC
             LIMIT 5
             """
+            return query, {}
 
     def _extract_error_type(self, error_message: str) -> Optional[str]:
         """Extract error type from message."""
