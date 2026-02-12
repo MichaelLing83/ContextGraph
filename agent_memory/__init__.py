@@ -14,6 +14,7 @@ from agent_memory.writer import MemoryWriter, RawTrajectory
 from agent_memory.retriever import MemoryRetriever, RetrievalResult
 from agent_memory.consolidator import MemoryConsolidator
 from agent_memory.memory import AgentMemory, MemoryContext, MemoryStats
+from agent_memory import evaluation
 
 __version__ = "0.1.0"
 __all__ = [
@@ -44,4 +45,6 @@ __all__ = [
     "AgentMemory",
     "MemoryContext",
     "MemoryStats",
+    # Evaluation module
+    "evaluation",
 ]
