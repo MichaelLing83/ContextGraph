@@ -1,18 +1,15 @@
 """Experiment orchestrator: simulate evaluation with/without context graph."""
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Dict, List, Optional
 import hashlib
-import json
 import logging
-import random
 
 from agent_memory.evaluation.metrics import ProblemResult, calculate_metrics
 from agent_memory.evaluation.analyzer import compare_results, ComparisonReport
 from agent_memory.evaluation.trajectory_parser import parse_swe_agent_trajectory
 from agent_memory.evaluation.data_splitter import random_split, DataSplit
-from agent_memory.writer import RawTrajectory
 
 logger = logging.getLogger(__name__)
 
