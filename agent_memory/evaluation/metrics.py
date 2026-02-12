@@ -54,6 +54,7 @@ class EvaluationMetrics:
     total_problems: int
     avg_tokens_per_problem: float
     avg_attempts_to_success: Optional[float]
+    failure_ratio: float = 0.0  # failed_attempts / total_attempts
 
 
 def calculate_metrics(results: List[ProblemResult]) -> EvaluationMetrics:
@@ -91,6 +92,13 @@ def calculate_metrics(results: List[ProblemResult]) -> EvaluationMetrics:
     success_attempts = [r.first_success_attempt for r in results if r.first_success_attempt is not None]
     avg_attempts = sum(success_attempts) / len(success_attempts) if success_attempts else None
 
+    # Failure ratio: total failed attempts / total attempts
+    total_attempts = sum(len(r.attempts) for r in results)
+    failed_attempts = sum(
+        1 for r in results for success in r.attempts if not success
+    )
+    failure_ratio = failed_attempts / total_attempts if total_attempts > 0 else 0.0
+
     return EvaluationMetrics(
         pass_at_1=pass_1,
         pass_at_3=pass_3,
@@ -98,4 +106,5 @@ def calculate_metrics(results: List[ProblemResult]) -> EvaluationMetrics:
         total_problems=n,
         avg_tokens_per_problem=avg_tokens,
         avg_attempts_to_success=avg_attempts,
+        failure_ratio=failure_ratio,
     )

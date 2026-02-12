@@ -20,6 +20,9 @@ class ComparisonReport:
     # Efficiency (positive = treatment succeeds faster)
     efficiency_gain: float  # Reduction in avg attempts
 
+    # Failure ratio improvement (positive = treatment has fewer failures)
+    failure_ratio_reduction: float
+
     # Raw metrics
     control: EvaluationMetrics
     treatment: EvaluationMetrics
@@ -60,6 +63,11 @@ class ComparisonReport:
 
         lines.extend([
             "",
+            "FAILURE RATIO (failed attempts / total attempts):",
+            f"  Control: {self.control.failure_ratio:.1%}",
+            f"  Treatment: {self.treatment.failure_ratio:.1%}",
+            f"  {self._fmt_failure_change()}",
+            "",
             "=" * 50,
         ])
 
@@ -87,6 +95,14 @@ class ComparisonReport:
         if self.efficiency_gain < 0:
             return f"Degradation: {abs(self.efficiency_gain):.1f} more attempts"
         return "No change in attempts"
+
+    def _fmt_failure_change(self) -> str:
+        """Format failure ratio change."""
+        if self.failure_ratio_reduction > 0:
+            return f"Reduction: {self.failure_ratio_reduction:.1%}"
+        if self.failure_ratio_reduction < 0:
+            return f"Increase: {abs(self.failure_ratio_reduction):.1%}"
+        return "No change: 0.0%"
 
 
 def compare_results(
@@ -123,12 +139,16 @@ def compare_results(
     else:
         efficiency_gain = 0.0
 
+    # Failure ratio reduction (positive = treatment has fewer failures)
+    failure_ratio_reduction = control.failure_ratio - treatment.failure_ratio
+
     return ComparisonReport(
         pass_at_1_improvement=pass_1_imp,
         pass_at_3_improvement=pass_3_imp,
         pass_at_5_improvement=pass_5_imp,
         token_reduction=token_reduction,
         efficiency_gain=efficiency_gain,
+        failure_ratio_reduction=failure_ratio_reduction,
         control=control,
         treatment=treatment,
     )
