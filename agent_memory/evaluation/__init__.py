@@ -26,6 +26,15 @@ from agent_memory.evaluation.analyzer import (
     compare_results,
     ComparisonReport,
 )
+from agent_memory.evaluation.experiment import (
+    run_experiment,
+    ExperimentResult,
+    SimulationConfig,
+    TrajectoryInfo,
+    simulate_control,
+    simulate_treatment,
+    parse_trajectory_info,
+)
 
 __all__ = [
     "parse_swe_agent_trajectory",
@@ -42,4 +51,11 @@ __all__ = [
     "QueryMemoryOutput",
     "compare_results",
     "ComparisonReport",
+    "run_experiment",
+    "ExperimentResult",
+    "SimulationConfig",
+    "TrajectoryInfo",
+    "simulate_control",
+    "simulate_treatment",
+    "parse_trajectory_info",
 ]
