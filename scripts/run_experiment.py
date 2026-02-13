@@ -79,10 +79,12 @@ def main():
         print(f"Error: '{args.trajectories_dir}' is not a directory.")
         sys.exit(1)
 
-    # Find trajectory files
+    # Find trajectory files (.traj or .json)
     traj_files = sorted(args.trajectories_dir.glob("*.traj"))
     if not traj_files:
-        print(f"No .traj files found in {args.trajectories_dir}")
+        traj_files = sorted(args.trajectories_dir.glob("*.json"))
+    if not traj_files:
+        print(f"No .traj or .json files found in {args.trajectories_dir}")
         sys.exit(1)
 
     print(f"Found {len(traj_files)} trajectory files")
