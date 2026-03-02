@@ -20,36 +20,27 @@ class QueryMemoryInput:
 
 
 @dataclass
-class MethodologyInfo:
-    """Methodology information for tool output."""
-
-    situation: str
-    strategy: str
-    confidence: float
-
-
-@dataclass
 class FragmentInfo:
     """Fragment information for tool output."""
 
     error_type: str
     resolution: str
-    from_trajectory: str
+    repo: str
+    instance_id: str
+    outcome: str
 
 
 @dataclass
 class QueryMemoryOutput:
     """Output from query_memory tool."""
 
-    methodologies: List[MethodologyInfo] = field(default_factory=list)
-    similar_fragments: List[FragmentInfo] = field(default_factory=list)
+    similar_experiences: List[FragmentInfo] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
 
     def to_json(self) -> str:
         """Serialize to JSON string."""
         return json.dumps({
-            "methodologies": [asdict(m) for m in self.methodologies],
-            "similar_fragments": [asdict(f) for f in self.similar_fragments],
+            "similar_experiences": [asdict(f) for f in self.similar_experiences],
             "warnings": self.warnings,
         }, indent=2)
 
@@ -111,52 +102,46 @@ class QueryMemoryTool:
             input_data: QueryMemoryInput with current context
 
         Returns:
-            QueryMemoryOutput with relevant methodologies and fragments
+            QueryMemoryOutput with relevant experiences
         """
-        # Map phase to valid State phase
-        phase_map = {
-            "exploring": "understanding",
-            "understanding": "understanding",
-            "locating": "locating",
-            "fixing": "fixing",
-            "verifying": "testing",
-            "testing": "testing",
-        }
-        mapped_phase = phase_map.get(input_data.phase, "fixing")
-
         # Create state for query
         state = State(
             tools=["bash", "edit", "view"],
             repo_summary="",
             task_description=input_data.task_description,
             current_error=input_data.current_error,
-            phase=mapped_phase,
+            phase="fixing",  # simplified — phase filtering removed
         )
 
-        # Query memory
+        # Query memory — retriever now returns enriched fragments
         context = self.memory.query(state)
 
-        # Convert to output format
-        methodologies = [
-            MethodologyInfo(
-                situation=m.situation,
-                strategy=m.strategy,
-                confidence=m.confidence,
-            )
-            for m in context.methodologies[:5]  # Limit to top 5
-        ]
+        # Use enriched fragments from the retriever if available
+        enriched = getattr(context, '_enriched_fragments', None)
+        if enriched is None:
+            # Fallback: access retriever directly for enriched data
+            retrieval_result = self.memory.retriever.retrieve(state)
+            enriched = retrieval_result.enriched_fragments
 
-        fragments = [
-            FragmentInfo(
-                error_type=f.fragment_type,
-                resolution=f.description,
-                from_trajectory=f.id,
-            )
-            for f in context.similar_fragments[:5]  # Limit to top 5
-        ]
+        fragments = []
+        for ef in enriched[:5]:
+            # Build a useful resolution description
+            resolution_parts = []
+            if ef.action_summary:
+                resolution_parts.append(ef.action_summary)
+            if ef.fragment.outcome and ef.fragment.outcome != "unknown":
+                resolution_parts.append(f"Outcome: {ef.fragment.outcome}")
+            resolution = ". ".join(resolution_parts) if resolution_parts else ef.fragment.description
+
+            fragments.append(FragmentInfo(
+                error_type=ef.error_type or ef.fragment.fragment_type,
+                resolution=resolution,
+                repo=ef.repo,
+                instance_id=ef.instance_id,
+                outcome=ef.fragment.outcome,
+            ))
 
         return QueryMemoryOutput(
-            methodologies=methodologies,
-            similar_fragments=fragments,
+            similar_experiences=fragments,
             warnings=context.warnings,
         )
