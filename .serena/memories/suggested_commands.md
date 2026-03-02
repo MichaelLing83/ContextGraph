@@ -1,161 +1,110 @@
-# Suggested Commands for ContextGraph Project
+# Suggested Commands
 
-## Development Commands
-
-### Running the Project
+## Environment Setup
 ```bash
-# Run basic demo with sample trajectory
-python demo.py
+# Create virtual environment (user prefers uv)
+uv venv .venv --python 3.12
+source .venv/bin/activate
 
-# Load data from HuggingFace
-python demo.py --huggingface
+# Install project in editable mode with dev deps
+uv pip install -e '.[dev]'
 
-# Run main analyzer module (if applicable)
-python analyzer.py --input <trajectory_file> --output <output_dir> --format json
+# Install extra dependencies
+uv pip install datasets python-dotenv openhands-ai
+
+# Install SWE-agent (editable, from local clone)
+cd ~/codes/SWE-agent && uv pip install -e .
 ```
 
-### Testing
+## Testing
 ```bash
-# Currently no test suite configured
-# TODO: Add pytest configuration
+# Run all tests
+pytest
+
+# Run specific test file
+pytest tests/test_models.py
+
+# Run specific test class/method
+pytest tests/evaluation/test_metrics.py::TestProblemResult::test_pass_at_1_success
+
+# Run tests with verbose output
+pytest -v
+
+# Run tests matching pattern
+pytest -k "test_pass"
 ```
 
-### Formatting and Linting
+## Infrastructure
 ```bash
-# Currently no formatters/linters configured
-# Potential future commands:
-# black .
-# flake8 .
-# mypy .
+# Start Neo4j container
+docker run -d --name neo4j-contextgraph -p 7474:7474 -p 7687:7687 \
+  -e NEO4J_AUTH=neo4j/contextgraph123 neo4j:5
+
+# Check Neo4j status
+docker ps | grep neo4j
+
+# Build context graph from training trajectories (~12 min)
+python scripts/build_context_graph.py
 ```
 
-### Git Operations
+## Running Experiments
 ```bash
-# Standard git workflow
+# Run SWE-agent control (3 attempts in background, 2 workers each)
+nohup .venv/bin/python scripts/run_real_swe_experiment.py --group control --num-workers 2 --attempt 1 > results/live_experiment/control_stdout.log 2>&1 &
+nohup .venv/bin/python scripts/run_real_swe_experiment.py --group control --num-workers 2 --attempt 2 > results/live_experiment/control_attempt2.log 2>&1 &
+nohup .venv/bin/python scripts/run_real_swe_experiment.py --group control --num-workers 2 --attempt 3 > results/live_experiment/control_attempt3.log 2>&1 &
+
+# Run SWE-agent treatment (3 attempts, 1 worker each to avoid rate limits)
+# IMPORTANT: Clean stale output dirs first!
+rm -rf results/live_experiment/swe_agent_treatment results/live_experiment/swe_agent_treatment_attempt2 results/live_experiment/swe_agent_treatment_attempt3
+nohup .venv/bin/python scripts/run_real_swe_experiment.py --group treatment --num-workers 1 --attempt 1 > results/live_experiment/treatment_stdout.log 2>&1 &
+nohup .venv/bin/python scripts/run_real_swe_experiment.py --group treatment --num-workers 1 --attempt 2 > results/live_experiment/treatment_attempt2.log 2>&1 &
+nohup .venv/bin/python scripts/run_real_swe_experiment.py --group treatment --num-workers 1 --attempt 3 > results/live_experiment/treatment_attempt3.log 2>&1 &
+
+# Monitor progress
+tail -f results/live_experiment/treatment_stdout.log
+ls results/live_experiment/swe_agent_treatment/ | wc -l  # count completed
+
+# Run OpenHands A/B experiment
+python scripts/run_real_openhands_experiment.py --n 200
+
+# Analyze results
+python results/live_experiment/run_live_analysis.py
+
+# Prepare train/test split
+python scripts/prepare_split.py
+
+# Collect results
+python scripts/collect_swe_agent_results.py
+python scripts/collect_openhands_results.py
+```
+
+## SWE-agent CLI
+```bash
+# Run SWE-agent batch (NOT python -m sweagent.run.run)
+python -m sweagent run-batch --config configs/swe_agent_control.yaml
+python -m sweagent run-batch --config configs/swe_agent_treatment.yaml
+```
+
+## Git
+```bash
 git status
-git add <files>
-git commit -m "message"
-git push origin main
-
-# View recent commits
-git log --oneline -10
-
-# Check diff
 git diff
+git log --oneline -10
+git add <file>
+git commit -m "message"
+git push origin <branch>
 ```
 
-## Dependency Management
-
-### Install Dependencies
+## System Utilities (Linux)
 ```bash
-# Basic dependencies
-pip install datasets
-
-# Optional dependencies
-pip install boto3  # For S3 data loading
-pip install sentence-transformers  # For embeddings (planned feature)
+ls, cd, pwd, mkdir, rm, cp, mv
+grep, find, cat, head, tail
+docker ps, docker logs, docker exec
 ```
 
-### List Installed Packages
-```bash
-pip list
-pip list | grep datasets
-```
-
-## Data Management
-
-### Download Data
-```bash
-# Data is automatically downloaded from HuggingFace when running:
-python demo.py --huggingface
-
-# Manual data loading via Python:
-python -c "from data_loader import load_swebench_lite; load_swebench_lite()"
-```
-
-## System Utilities (macOS/Darwin)
-
-### File Operations
-```bash
-# List files
-ls -lah
-ls -R  # Recursive listing
-
-# Find files
-find . -name "*.py"
-find . -type f -name "*.json"
-
-# Search in files (use ripgrep if available, otherwise grep)
-rg "pattern" .
-grep -r "pattern" .
-
-# View file contents
-cat filename
-head -n 20 filename
-tail -n 20 filename
-less filename
-```
-
-### Directory Navigation
-```bash
-pwd  # Print working directory
-cd <directory>
-cd ..  # Go up one level
-cd ~  # Go to home directory
-```
-
-### Process Management
-```bash
-# Find running Python processes
-ps aux | grep python
-
-# Kill a process
-kill <PID>
-kill -9 <PID>  # Force kill
-```
-
-## Output and Results
-
-### View Generated Results
-```bash
-# List output files
-ls -lah demo_output/
-
-# View JSON output
-cat demo_output/graph.json | python -m json.tool
-cat demo_output/context_graph.json | head -50
-
-# Check file sizes
-du -sh demo_output/*
-```
-
-## Workflow Commands
-
-### After Completing a Task
-Since the project currently has no automated testing or CI/CD:
-
-1. **Manual testing**: Run demos to verify functionality
-   ```bash
-   python demo.py
-   python demo.py --huggingface
-   ```
-
-2. **Code review**: Manually review changes
-   ```bash
-   git diff
-   ```
-
-3. **Commit changes**: Follow git workflow
-   ```bash
-   git add .
-   git commit -m "Descriptive message"
-   git push
-   ```
-
-## Future Improvements
-- Add pytest test suite
-- Configure black/autopep8 for formatting
-- Add flake8/pylint for linting
-- Set up pre-commit hooks
-- Create requirements.txt or pyproject.toml
-- Add CI/CD pipeline
+## Notes
+- Always use `uv` instead of `pip` for package management
+- `.env` file must exist with `ANTHROPIC_API_KEY` and `ANTHROPIC_API_BASE`
+- Neo4j graph must be rebuilt after container recreation
+- On Linux, Docker needs `--add-host=host.docker.internal:host-gateway` for Neo4j access from containers

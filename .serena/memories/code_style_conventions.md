@@ -1,71 +1,64 @@
-# Code Style and Conventions
+# Code Style & Conventions
 
-## General Style
-- **Docstrings**: Triple-quoted strings at module and class level (mixed Chinese and English)
-- **Comments**: Both English and Chinese comments are used
-- **Line Length**: Generally follows PEP 8 guidelines
-- **File Encoding**: UTF-8
+## Naming
+- **snake_case** for functions, methods, variables, module names
+- **PascalCase** for classes (e.g., `AgentMemory`, `MemoryContext`, `QueryMemoryTool`)
+- **UPPER_SNAKE_CASE** for constants (e.g., `SPLIT_PATH`, `NEO4J_URI`, `VALID_TYPES`)
+- **Module names**: lowercase, no hyphens (e.g., `neo4j_store.py`, `loop_detector.py`)
+
+## Data Models
+- **dataclasses** used extensively for data models (not Pydantic)
+- Models implement `to_dict()` and `@classmethod from_dict()` for serialization
+- `__post_init__` used for validation
+- `Optional[...]` with `= None` for optional fields
+- `field(default_factory=...)` for mutable defaults
 
 ## Type Hints
-- **Extensively used** throughout the codebase
-- Function parameters and return types are annotated
-- Examples:
-  ```python
-  def parse_swe_agent_trajectory(self, traj_path: Path) -> Trajectory:
-  def extract_files_from_text(self, text: str) -> List[str]:
-  ```
+- Type hints used on function signatures and class fields
+- Imports from `typing`: `Optional`, `List`, `Dict`, `Tuple`, `Any`
+- Return types annotated (e.g., `-> Dict[str, Any]`, `-> "Fragment"`)
 
-## Data Structures
-- **Dataclasses** are heavily used for structured data:
-  - `@dataclass` decorator with type hints
-  - `field(default_factory=...)` for mutable defaults
-  - Examples: `CodeEntity`, `CodeRelation`, `ActionStep`, `Trajectory`, `SWEBenchInstance`
+## Docstrings
+- Triple-quote docstrings on classes and public methods
+- Short one-line docstrings for simple methods
+- Multi-line docstrings with description for complex functions
+- Module-level docstrings at top of files
 
-## Naming Conventions
-- **Classes**: PascalCase (e.g., `TrajectoryParser`, `CodeEntity`, `GraphExporter`)
-- **Functions/Methods**: snake_case (e.g., `parse_swe_agent_trajectory`, `extract_entities_and_relations`)
-- **Constants**: UPPER_SNAKE_CASE (e.g., `ACTION_CATEGORIES`, `DATASETS`)
-- **Private Methods**: Leading underscore (e.g., `_parse_step`, `_extract_files_from_text`)
+## Logging
+- `logging` module used (not print statements for production code)
+- `logger = logging.getLogger(__name__)` pattern
+- `logging.basicConfig()` in scripts
 
-## Module Organization
-- Large separator comments using `# ============================================================================`
-- Sections clearly marked (e.g., "数据结构定义", "轨迹解析器", "实体和关系提取器")
-- Imports organized at the top
+## Imports
+- Standard library first, then third-party, then local
+- Scripts use `sys.path.insert(0, str(project_root))` for project imports
+- `from pathlib import Path` preferred over `os.path`
 
-## Documentation Headers
-Each module starts with a triple-quoted docstring containing:
-- Module name (English and Chinese)
-- Purpose description
-- Main features (numbered list)
+## Testing
+- pytest with class-based test organization (`class TestFoo:`)
+- Fixtures in `conftest.py`
+- Test methods named `test_<what_is_being_tested>`
+- Short docstrings on test methods
 
-Example from analyzer.py:
-```python
-\"\"\"
-SWE-bench Trajectory Analyzer
-=============================
-分析 SWE-bench agent 轨迹，提取用于 Context Graph 构建的模式和实体
-
-主要功能:
-1. 加载和解析轨迹数据 (SWE-agent, OpenHands 等格式)
-...
-\"\"\"
-```
+## File Organization
+- Core library in `agent_memory/`
+- Scripts in `scripts/` (standalone, runnable)
+- Experiment framework in `experiments/ab_test/`
+- Tests mirror source structure in `tests/`
 
 ## Error Handling
-- Try-except blocks used for external dependencies (e.g., imports)
-- Logger warnings for non-critical failures
-- Silent failures with warnings for file loading iterations
+- `ValueError` for invalid inputs (e.g., invalid fragment_type)
+- `pytest.raises` for testing exceptions
+- Graceful fallback with warnings (e.g., mock mode when Neo4j unavailable)
 
-## Default Values
-- Optional parameters use `Optional[Type] = None`
-- Dictionary/list defaults use `field(default_factory=dict/list)` in dataclasses
-- Class constants defined at class level (e.g., `ACTION_CATEGORIES`, `DATASETS`)
+## Configuration
+- Nested dataclasses for configuration (`ExperimentConfig` → `PathConfig`, `SplitConfig`, etc.)
+- Constants defined at module level
+- Environment variables via `os.environ.get()` with defaults
+- YAML configs for SWE-agent
 
-## No Explicit Formatters/Linters
-The project currently does not have:
-- Black, autopep8, or other code formatters
-- Flake8, pylint, or other linters
-- Pre-commit hooks
-- pytest configuration
-
-Style appears to be manually maintained following PEP 8 principles.
+## Patterns
+- Context manager support (`__enter__`/`__exit__`) on `AgentMemory`
+- `frozenset` for immutable valid value sets
+- `@classmethod` factory methods (e.g., `from_dict`)
+- `field(default_factory=...)` for nested config defaults

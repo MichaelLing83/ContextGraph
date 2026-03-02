@@ -1,121 +1,47 @@
 # Task Completion Checklist
 
-## What to Do After Completing a Task
+## Before Completing a Task
 
-Since the ContextGraph project currently lacks automated testing, formatting, and CI/CD, follow this manual checklist:
+### Code Quality
+- [ ] Code follows project style conventions (see `code_style_conventions` memory)
+- [ ] Type hints on function signatures
+- [ ] Docstrings on public classes and methods
+- [ ] No print statements in library code (use logging)
+- [ ] dataclasses used for data models (not Pydantic)
 
-### 1. Manual Testing
-Run the demos to ensure functionality still works:
-```bash
-# Test basic demo
-python demo.py
+### Testing
+- [ ] Run `pytest` to ensure all tests pass
+- [ ] Add tests for new functionality in appropriate `tests/` location
+- [ ] Tests use class-based organization with descriptive method names
 
-# Test HuggingFace data loading
-python demo.py --huggingface
-```
+### Validation
+- [ ] No simulation experiments (only real agent runs)
+- [ ] Changes are backward-compatible or all references updated
+- [ ] No sensitive data (API keys, passwords) in committed code
+- [ ] `.env` file is gitignored
 
-Expected outputs:
-- Demo should complete without errors
-- Output files should be generated in `demo_output/`
-- Statistics should be displayed correctly
+### Integration Points
+- [ ] If modifying `agent_memory/`, check if `tools/query_memory/lib/` bundle needs updating
+- [ ] If modifying `agent_memory/`, ALSO sync to `~/codes/SWE-agent/tools/query_memory/lib/agent_memory/`
+- [ ] If modifying data models, check `to_dict()`/`from_dict()` consistency
+- [ ] If modifying Neo4j schema, graph may need rebuilding
+- [ ] If modifying SWE-agent integration, update `configs/swe_agent_*.yaml` if needed
 
-### 2. Code Review
-Manually review your changes:
-```bash
-# View what changed
-git diff
+### Before Restarting Treatment Runs
+- [ ] Delete ALL stale treatment output dirs (swe_agent_treatment, _attempt2, _attempt3)
+- [ ] Verify retriever.py changes are synced to both bundle locations
+- [ ] Verify Neo4j container is running with data intact (16,194 nodes expected)
+- [ ] Verify docker_args fix is in both `run_swe_agent_single()` and `run_swe_agent_batch()`
+- [ ] Keep total concurrent API callers ≤ 9 to avoid ChatAnywhere rate limits
 
-# View staged changes
-git diff --cached
-
-# Check file status
-git status
-```
-
-### 3. Verify Code Quality
-Since no automated linters are configured, manually check:
-- [ ] Code follows existing style (see code_style_conventions.md)
-- [ ] Type hints are used for new functions
-- [ ] Docstrings are added for new classes/modules
-- [ ] No obvious bugs or errors
-- [ ] Variable names are descriptive (snake_case)
-- [ ] Class names use PascalCase
-
-### 4. Check Output Files
-If your changes affect data processing or graph generation:
-```bash
-# Verify output files exist and are valid JSON
-ls -lah demo_output/
-cat demo_output/graph.json | python -m json.tool
-cat demo_output/context_graph.json | python -m json.tool
-```
-
-### 5. Commit Changes
-```bash
-# Stage specific files or all changes
-git add <specific_files>
-# or
-git add .
-
-# Commit with descriptive message
-git commit -m "Brief description of changes
-
-More detailed explanation if needed.
-- Key change 1
-- Key change 2"
-
-# Push to remote
-git push origin main
-```
-
-### 6. Update Documentation (if applicable)
-If you added new features or changed functionality:
-- [ ] Update README.md
-- [ ] Update docstrings
-- [ ] Add usage examples if needed
-
-## Common Issues to Check For
-
-### Import Errors
-```bash
-# Ensure all dependencies are installed
-pip list | grep datasets
-pip list | grep boto3  # If using S3 features
-```
-
-### File Path Issues
-- Ensure paths use `Path` objects from `pathlib`
-- Check for cross-platform compatibility (macOS/Linux/Windows)
-
-### JSON Serialization
-- Ensure datetime objects use `.isoformat()` or `default=str`
-- Check for circular references in data structures
-
-### Memory/Performance
-- For large datasets, ensure streaming is used where appropriate
-- Check that file operations don't load entire files unnecessarily
-
-## Future: When CI/CD is Added
-Once the project has automated testing:
+### Commands to Run
 ```bash
 # Run tests
 pytest
-pytest -v  # Verbose output
-pytest --cov  # With coverage
 
-# Run formatters
-black .
-isort .
+# Check for import errors
+python -c "import agent_memory"
 
-# Run linters
-flake8 .
-mypy .
-
-# Pre-commit hooks will run automatically
+# Verify specific module
+python -c "from agent_memory.evaluation.metrics import calculate_metrics"
 ```
-
-## Version Control Best Practices
-- Keep commits atomic (one logical change per commit)
-- Write clear commit messages
-- Don't commit generated files (demo_output/*, __pycache__/*, etc.)
-- These are already in .gitignore
