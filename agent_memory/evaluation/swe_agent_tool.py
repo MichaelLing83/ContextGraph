@@ -31,27 +31,42 @@ class FragmentInfo:
 
 
 @dataclass
+class StrategyInfo:
+    """Strategy information for tool output."""
+
+    rule_text: str
+    category: str
+    repo: str
+    confidence: float
+
+
+@dataclass
 class QueryMemoryOutput:
     """Output from query_memory tool."""
 
     similar_experiences: List[FragmentInfo] = field(default_factory=list)
+    strategies: List[StrategyInfo] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
+    playbook_text: str = ""
 
     def to_json(self) -> str:
-        """Serialize to JSON string (backward compat)."""
+        """Serialize to JSON string."""
         return json.dumps({
             "similar_experiences": [asdict(f) for f in self.similar_experiences],
+            "strategies": [asdict(s) for s in self.strategies],
             "warnings": self.warnings,
+            "playbook_text": self.playbook_text,
         }, indent=2)
 
     def to_structured(self) -> str:
         """Serialize to structured XML format (Zep-style).
 
         Token-efficient format that's easier for LLMs to parse.
+        Prepends playbook text if available.
         """
         from agent_memory.formatter import StructuredContextFormatter
-        from agent_memory.retriever import EnrichedFragment
-        from agent_memory.models import Fragment
+        from agent_memory.retriever import EnrichedFragment, RetrievalResult
+        from agent_memory.models import Fragment, Strategy
 
         # Convert FragmentInfo back to EnrichedFragment for the formatter
         enriched = []
@@ -70,14 +85,33 @@ class QueryMemoryOutput:
                 instance_id=fi.instance_id,
                 error_type=fi.error_type,
                 action_summary=fi.resolution,
-                relevance_score=max(0.0, 0.8 - (i * 0.1)),  # Approximate from position, clamped
+                relevance_score=max(0.0, 0.8 - (i * 0.1)),
             ))
 
-        formatter = StructuredContextFormatter()
-        return formatter.format_enriched(
+        # Convert StrategyInfo to Strategy models
+        strategy_models = [
+            Strategy(
+                id=f"output_strat_{i}",
+                rule_text=si.rule_text,
+                category=si.category,
+                source_trajectory_id="",
+                source_repo=si.repo,
+                confidence=si.confidence,
+            )
+            for i, si in enumerate(self.strategies)
+        ]
+
+        result = RetrievalResult(
             enriched_fragments=enriched,
+            strategies=strategy_models,
             warnings=self.warnings,
         )
+        formatter = StructuredContextFormatter()
+        xml_text = formatter.format(result)
+
+        if self.playbook_text:
+            return self.playbook_text + "\n\n" + xml_text
+        return xml_text
 
 
 class QueryMemoryTool:
@@ -151,6 +185,9 @@ class QueryMemoryTool:
         # Query memory — retriever now returns enriched fragments
         context = self.memory.query(state)
 
+        # Get playbook context
+        playbook_text = self.memory.query_playbook(state)
+
         # Use enriched fragments from the retriever if available
         enriched = getattr(context, '_enriched_fragments', None)
         if enriched is None:
@@ -176,7 +213,20 @@ class QueryMemoryTool:
                 outcome=ef.fragment.outcome,
             ))
 
+        # Convert strategies from memory context
+        strategy_infos = [
+            StrategyInfo(
+                rule_text=s.rule_text,
+                category=s.category,
+                repo=s.source_repo,
+                confidence=s.confidence,
+            )
+            for s in context.strategies[:5]
+        ]
+
         return QueryMemoryOutput(
             similar_experiences=fragments,
+            strategies=strategy_infos,
             warnings=context.warnings,
+            playbook_text=playbook_text,
         )

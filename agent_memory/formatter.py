@@ -20,11 +20,12 @@ from xml.sax.saxutils import escape as xml_escape
 import logging
 
 from agent_memory.retriever import EnrichedFragment, RetrievalResult
-from agent_memory.models import Methodology, ErrorPattern
+from agent_memory.models import Methodology, ErrorPattern, Strategy
 
 logger = logging.getLogger(__name__)
 
 # Token budget caps
+MAX_STRATEGIES = 5
 MAX_EXPERIENCES = 3
 MAX_ERROR_PATTERNS = 2
 MAX_METHODOLOGIES = 1
@@ -41,10 +42,12 @@ class StructuredContextFormatter:
 
     def __init__(
         self,
+        max_strategies: int = MAX_STRATEGIES,
         max_experiences: int = MAX_EXPERIENCES,
         max_error_patterns: int = MAX_ERROR_PATTERNS,
         max_methodologies: int = MAX_METHODOLOGIES,
     ):
+        self.max_strategies = max_strategies
         self.max_experiences = max_experiences
         self.max_error_patterns = max_error_patterns
         self.max_methodologies = max_methodologies
@@ -59,6 +62,12 @@ class StructuredContextFormatter:
         Returns a string suitable for injection into agent prompts.
         """
         parts = []
+
+        # Strategies (primary output — concise, high-level rules)
+        if result.strategies:
+            strategies_xml = self._format_strategies(result.strategies)
+            if strategies_xml:
+                parts.append(strategies_xml)
 
         # Past experiences from enriched fragments
         experiences = self._format_experiences(result.enriched_fragments)
@@ -101,6 +110,24 @@ class StructuredContextFormatter:
             warnings=warnings or [],
         )
         return self.format(result, error_patterns=error_patterns)
+
+    def _format_strategies(self, strategies: List[Strategy]) -> str:
+        """Format strategies as <STRATEGIES> XML."""
+        if not strategies:
+            return ""
+
+        lines = ["<STRATEGIES>"]
+        for s in strategies[:self.max_strategies]:
+            confidence = f"{s.confidence:.2f}"
+            repo = xml_escape(s.source_repo) if s.source_repo else "unknown"
+            lines.append(
+                f'  <strategy category="{xml_escape(s.category)}" '
+                f'confidence="{confidence}" repo="{repo}">'
+            )
+            lines.append(f"    {xml_escape(s.rule_text)}")
+            lines.append("  </strategy>")
+        lines.append("</STRATEGIES>")
+        return "\n".join(lines)
 
     def _format_experiences(self, fragments: List[EnrichedFragment]) -> str:
         """Format enriched fragments as <PAST_EXPERIENCES> XML."""

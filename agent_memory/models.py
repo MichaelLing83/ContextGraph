@@ -214,6 +214,51 @@ class Methodology:
 
 
 @dataclass
+class Strategy:
+    """LLM-extracted reusable strategy from a trajectory."""
+
+    id: str                    # "strat_{uuid12}"
+    rule_text: str             # The strategy text (one sentence)
+    category: str              # error_handling | debugging | testing | code_navigation | ...
+    source_trajectory_id: str  # Which trajectory it came from
+    source_repo: str           # e.g., "django/django"
+    confidence: float = 0.8    # Initial confidence
+    embedding: Optional[List[float]] = None
+
+    VALID_CATEGORIES = frozenset([
+        "error_handling",
+        "debugging",
+        "testing",
+        "code_navigation",
+        "dependency",
+        "configuration",
+    ])
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "rule_text": self.rule_text,
+            "category": self.category,
+            "source_trajectory_id": self.source_trajectory_id,
+            "source_repo": self.source_repo,
+            "confidence": self.confidence,
+            "embedding": self.embedding,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "Strategy":
+        return cls(
+            id=d["id"],
+            rule_text=d["rule_text"],
+            category=d.get("category", "debugging"),
+            source_trajectory_id=d.get("source_trajectory_id", ""),
+            source_repo=d.get("source_repo", ""),
+            confidence=d.get("confidence", 0.8),
+            embedding=d.get("embedding"),
+        )
+
+
+@dataclass
 class TemporalEdge:
     """Temporal validity metadata for graph edges (Dual Timeline model).
 
@@ -323,4 +368,47 @@ class ErrorPattern:
             error_keywords=d["error_keywords"],
             context=d.get("context", ""),
             frequency=d.get("frequency", 0),
+        )
+
+
+# Playbook sections in canonical display order
+PLAYBOOK_SECTIONS = {
+    "shr": "STRATEGIES AND HARD RULES",
+    "api": "APIs TO USE FOR SPECIFIC INFORMATION",
+    "snippet": "USEFUL CODE SNIPPETS AND TEMPLATES",
+    "cms": "COMMON MISTAKES AND CORRECT STRATEGIES",
+    "psw": "PROBLEM-SOLVING HEURISTICS AND WORKFLOWS",
+    "verify": "VERIFICATION CHECKLIST",
+    "pitfall": "TROUBLESHOOTING AND PITFALLS",
+    "misc": "OTHERS",
+}
+
+
+@dataclass
+class PlaybookEntry:
+    """A single rule in a playbook, identified by prefix-NNNNN id."""
+
+    id: str                    # "shr-00001"
+    prefix: str                # "shr"
+    section: str               # "STRATEGIES AND HARD RULES"
+    text: str                  # The rule text
+    embedding: Optional[List[float]] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "prefix": self.prefix,
+            "section": self.section,
+            "text": self.text,
+            "embedding": self.embedding,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "PlaybookEntry":
+        return cls(
+            id=d["id"],
+            prefix=d["prefix"],
+            section=d.get("section", "OTHERS"),
+            text=d["text"],
+            embedding=d.get("embedding"),
         )

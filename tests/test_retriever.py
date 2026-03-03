@@ -1,7 +1,7 @@
 """Tests for MemoryRetriever."""
 
 from agent_memory.retriever import MemoryRetriever, RetrievalResult, ScoredResult
-from agent_memory.models import State, Methodology
+from agent_memory.models import State, Methodology, Strategy
 
 
 class TestMemoryRetriever:
@@ -292,3 +292,77 @@ class TestTripleSearch:
         enriched = retriever._scored_to_enriched(scored)
         assert len(enriched) == 1
         assert enriched[0].fragment.id == "f1"
+
+
+class TestStrategySearch:
+    """Tests for strategy search channel."""
+
+    def test_retrieval_result_has_strategies(self):
+        """RetrievalResult should have strategies field."""
+        result = RetrievalResult()
+        assert hasattr(result, "strategies")
+        assert result.strategies == []
+
+    def test_strategies_affect_is_empty(self):
+        """Strategies should make is_empty return False."""
+        empty = RetrievalResult()
+        assert empty.is_empty()
+
+        with_strategies = RetrievalResult(strategies=[
+            Strategy(
+                id="s1", rule_text="Test rule", category="debugging",
+                source_trajectory_id="t1", source_repo="test/repo",
+            )
+        ])
+        assert not with_strategies.is_empty()
+
+    def test_search_strategies_without_store(self):
+        """Strategy search returns empty without store."""
+        retriever = MemoryRetriever(store=None, embedder=None)
+        assert retriever._search_strategies(None, "") == []
+        assert retriever._search_strategies([1.0, 0.0], "test") == []
+
+    def test_search_strategies_bm25_channel(self):
+        """Strategy BM25 search should return Strategy objects."""
+        class DummyStore:
+            def execute_query(self, query, parameters=None):
+                if "fulltext" in query and "strategy_text" in query:
+                    return [
+                        {
+                            "id": "strat_001",
+                            "rule_text": "Always check import paths when ImportError occurs",
+                            "category": "error_handling",
+                            "source_trajectory_id": "t1",
+                            "source_repo": "django/django",
+                            "confidence": 0.8,
+                            "score": 2.5,
+                        },
+                    ]
+                if "SHOW INDEXES" in query:
+                    return []  # No vector index
+                return []
+
+        retriever = MemoryRetriever(store=DummyStore(), embedder=None)
+        strategies = retriever._search_strategies(None, "ImportError check")
+        assert len(strategies) == 1
+        assert strategies[0].id == "strat_001"
+        assert strategies[0].category == "error_handling"
+        assert strategies[0].source_repo == "django/django"
+
+    def test_check_strategy_index_without_store(self):
+        """Strategy index check returns False without store."""
+        retriever = MemoryRetriever(store=None, embedder=None)
+        assert retriever._check_strategy_index() is False
+
+    def test_strategy_model_from_dict(self):
+        """Test Strategy.from_dict round-trip."""
+        strat = Strategy(
+            id="s1", rule_text="Test rule", category="debugging",
+            source_trajectory_id="t1", source_repo="test/repo",
+            confidence=0.9,
+        )
+        d = strat.to_dict()
+        restored = Strategy.from_dict(d)
+        assert restored.id == "s1"
+        assert restored.rule_text == "Test rule"
+        assert restored.confidence == 0.9

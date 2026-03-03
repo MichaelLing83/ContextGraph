@@ -15,7 +15,7 @@ import re
 import time
 import logging
 
-from agent_memory.models import State, Methodology, Fragment
+from agent_memory.models import State, Methodology, Fragment, Strategy
 
 if TYPE_CHECKING:
     from agent_memory.neo4j_store import Neo4jStore
@@ -76,6 +76,7 @@ class RetrievalResult:
     similar_fragments: List[Fragment] = field(default_factory=list)
     enriched_fragments: List[EnrichedFragment] = field(default_factory=list)
     error_solutions: List[Dict[str, Any]] = field(default_factory=list)
+    strategies: List[Strategy] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
 
     def is_empty(self) -> bool:
@@ -83,7 +84,8 @@ class RetrievalResult:
             not self.methodologies and
             not self.similar_fragments and
             not self.enriched_fragments and
-            not self.error_solutions
+            not self.error_solutions and
+            not self.strategies
         )
 
 
@@ -190,6 +192,11 @@ class MemoryRetriever:
         result.similar_fragments = [
             ef.fragment for ef in result.enriched_fragments
         ]
+
+        # Channel 5: Strategy search (LLM-extracted rules)
+        result.strategies = self._search_strategies(
+            query_embedding, query_text, top_k=5
+        )
 
         return result
 
@@ -419,6 +426,133 @@ class MemoryRetriever:
         return scored
 
     # ------------------------------------------------------------------
+    # Strategy search (LLM-extracted rules)
+    # ------------------------------------------------------------------
+
+    def _search_strategies(
+        self,
+        query_embedding: Optional[List[float]],
+        query_text: str,
+        top_k: int = 5,
+    ) -> List[Strategy]:
+        """Search Strategy nodes by vector similarity + BM25.
+
+        Returns Strategy objects (not ScoredResults) since strategies
+        are a separate output channel from fragment-based results.
+        Uses RRF (reciprocal rank fusion) to combine cosine and BM25
+        rankings, weighted by retrieval relevance rather than just confidence.
+        """
+        if not self.store:
+            return []
+
+        # Collect ranked lists from each channel
+        cosine_ranked: List[tuple] = []  # (id, score, strategy_data)
+        bm25_ranked: List[tuple] = []
+
+        # Cosine on strategy_embedding
+        if query_embedding and self._check_strategy_index():
+            try:
+                cosine_query = """
+                CALL db.index.vector.queryNodes('strategy_embedding', $k, $embedding)
+                YIELD node, score
+                RETURN node.id AS id, node.rule_text AS rule_text,
+                       node.category AS category,
+                       node.source_trajectory_id AS source_trajectory_id,
+                       node.source_repo AS source_repo,
+                       node.confidence AS confidence,
+                       score
+                LIMIT $k
+                """
+                results = self.store.execute_query(cosine_query, {
+                    "k": top_k * 2,
+                    "embedding": query_embedding,
+                })
+                for r in results:
+                    sid = r.get("id", "")
+                    if sid:
+                        cosine_ranked.append((sid, r.get("score", 0), r))
+            except Exception as e:
+                logger.debug("Strategy cosine search failed: %s", e)
+
+        # BM25 on strategy_text
+        if query_text:
+            safe_query = self._escape_lucene(query_text)
+            if safe_query.strip():
+                try:
+                    bm25_query = """
+                    CALL db.index.fulltext.queryNodes('strategy_text', $query)
+                    YIELD node, score
+                    RETURN node.id AS id, node.rule_text AS rule_text,
+                           node.category AS category,
+                           node.source_trajectory_id AS source_trajectory_id,
+                           node.source_repo AS source_repo,
+                           node.confidence AS confidence,
+                           score
+                    LIMIT $k
+                    """
+                    results = self.store.execute_query(bm25_query, {
+                        "query": safe_query,
+                        "k": top_k * 2,
+                    })
+                    for r in results:
+                        sid = r.get("id", "")
+                        if sid:
+                            bm25_ranked.append((sid, r.get("score", 0), r))
+                except Exception as e:
+                    logger.debug("Strategy BM25 search failed: %s", e)
+
+        # RRF merge: combine ranks from both channels
+        rrf_scores: Dict[str, float] = {}
+        strategy_data: Dict[str, dict] = {}
+        rrf_k = 60  # RRF constant
+
+        for rank, (sid, _, data) in enumerate(cosine_ranked):
+            rrf_scores[sid] = rrf_scores.get(sid, 0) + 1.0 / (rrf_k + rank + 1)
+            if sid not in strategy_data:
+                strategy_data[sid] = data
+
+        for rank, (sid, _, data) in enumerate(bm25_ranked):
+            rrf_scores[sid] = rrf_scores.get(sid, 0) + 1.0 / (rrf_k + rank + 1)
+            if sid not in strategy_data:
+                strategy_data[sid] = data
+
+        # Sort by RRF score (retrieval relevance), break ties with confidence
+        sorted_ids = sorted(
+            rrf_scores.keys(),
+            key=lambda sid: (
+                rrf_scores[sid],
+                strategy_data[sid].get("confidence", 0.5),
+            ),
+            reverse=True,
+        )
+
+        strategies = []
+        for sid in sorted_ids[:top_k]:
+            r = strategy_data[sid]
+            strategies.append(Strategy(
+                id=sid,
+                rule_text=r.get("rule_text", ""),
+                category=r.get("category", "debugging"),
+                source_trajectory_id=r.get("source_trajectory_id", ""),
+                source_repo=r.get("source_repo", ""),
+                confidence=r.get("confidence", 0.5),
+            ))
+
+        return strategies
+
+    def _check_strategy_index(self) -> bool:
+        """Check if strategy vector index exists in Neo4j."""
+        if not self.store:
+            return False
+        try:
+            results = self.store.execute_query(
+                "SHOW INDEXES YIELD name WHERE name = 'strategy_embedding' RETURN name"
+            )
+            return len(results) > 0
+        except Exception:
+            return False
+
+    # ------------------------------------------------------------------
     # Legacy retrieval (backward compat)
     # ------------------------------------------------------------------
 
@@ -447,6 +581,13 @@ class MemoryRetriever:
         result.similar_fragments = [
             ef.fragment for ef in result.enriched_fragments
         ]
+
+        # Strategy search (BM25-only works without vector indexes)
+        query_text = self._build_query_text(current_state)
+        query_embedding = current_state.embedding
+        result.strategies = self._search_strategies(
+            query_embedding, query_text, top_k=5
+        )
 
         return result
 

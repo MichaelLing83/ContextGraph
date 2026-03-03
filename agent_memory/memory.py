@@ -4,7 +4,7 @@ from typing import Optional, List
 from dataclasses import dataclass, field
 import logging
 
-from agent_memory.models import State, Methodology, Fragment
+from agent_memory.models import State, Methodology, Fragment, Strategy
 from agent_memory.neo4j_store import Neo4jStore
 from agent_memory.embeddings import get_embedding_client
 from agent_memory.writer import MemoryWriter, RawTrajectory
@@ -14,6 +14,7 @@ from agent_memory.loop_detector import LoopDetector, LoopInfo
 from agent_memory.entity_resolver import EntityResolver
 from agent_memory.community import CommunityDetector
 from agent_memory.formatter import StructuredContextFormatter
+from agent_memory.playbook import PlaybookRetriever, format_playbook
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +25,11 @@ class MemoryContext:
 
     methodologies: List[Methodology] = field(default_factory=list)
     similar_fragments: List[Fragment] = field(default_factory=list)
+    strategies: List[Strategy] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
 
     def has_suggestions(self) -> bool:
-        return bool(self.methodologies)
+        return bool(self.methodologies or self.strategies)
 
     def to_structured(self) -> str:
         """Return structured XML representation of this context."""
@@ -41,6 +43,7 @@ class MemoryContext:
             methodologies=self.methodologies,
             similar_fragments=self.similar_fragments,
             enriched_fragments=enriched,
+            strategies=self.strategies,
             warnings=self.warnings,
         )
         formatter = StructuredContextFormatter()
@@ -122,6 +125,9 @@ class AgentMemory:
         )
         self.loop_detector = LoopDetector()
 
+        # Playbook retriever
+        self.playbook_retriever = PlaybookRetriever(self.store, self.embedder)
+
         # Consolidation tracking
         self._trajectory_count = 0
         self._consolidate_every = consolidate_every
@@ -147,6 +153,7 @@ class AgentMemory:
         return MemoryContext(
             methodologies=result.methodologies,
             similar_fragments=result.similar_fragments,
+            strategies=result.strategies,
             warnings=result.warnings,
         )
 
@@ -155,13 +162,48 @@ class AgentMemory:
 
         Convenience method that returns token-efficient XML output
         suitable for direct injection into agent prompts.
+        Includes playbook entries before the XML section.
         """
         if self.embedder and not current_state.embedding:
             situation_str = current_state.to_situation_string()
             current_state.embedding = self.embedder.embed(situation_str)
 
+        # Get playbook context
+        playbook_text = self.query_playbook(current_state)
+
+        # Get retriever context
         result = self.retriever.retrieve(current_state)
-        return self.formatter.format(result)
+        xml_text = self.formatter.format(result)
+
+        if playbook_text:
+            return playbook_text + "\n\n" + xml_text
+        return xml_text
+
+    def query_playbook(self, current_state: State, top_k: int = 10) -> str:
+        """Query playbook entries relevant to the current state.
+
+        Returns playbook-format text grouped by section, or empty string
+        if no entries found.
+        """
+        # Build query text from state
+        parts = []
+        if current_state.current_error:
+            parts.append(current_state.current_error)
+        if current_state.task_description:
+            parts.append(current_state.task_description)
+        if not parts:
+            return ""
+
+        query_text = " ".join(parts)
+        entries = self.playbook_retriever.retrieve(
+            query_text,
+            query_embedding=current_state.embedding,
+            top_k=top_k,
+        )
+
+        if not entries:
+            return ""
+        return format_playbook(entries)
 
     def check_loop(self, state_history: List[State]) -> Optional[LoopInfo]:
         """

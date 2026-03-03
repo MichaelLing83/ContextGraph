@@ -520,13 +520,13 @@ class TestQueryMemoryBundle:
 # ---------------------------------------------------------------------------
 
 class TestRunGroupSequential:
-    @patch("scripts.run_real_swe_experiment.run_swe_agent_single")
-    def test_sequential_run_completes(self, mock_run, tmp_path):
+    @patch("scripts.run_real_swe_experiment.run_swe_agent_batch")
+    def test_sequential_run_completes(self, mock_batch, tmp_path):
         """Test that sequential runner processes instances and saves progress."""
         instance_ids = ["p1", "p2"]
 
-        # Mock SWE-agent returning success
-        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        # Mock SWE-agent batch returning success
+        mock_batch.return_value = MagicMock(returncode=0, stderr="")
 
         # Create .traj files as if SWE-agent produced them
         for iid in instance_ids:
@@ -538,13 +538,14 @@ class TestRunGroupSequential:
             output_dir=tmp_path,
         )
 
+        assert mock_batch.call_count == 1
         assert len(progress.completed) == 2
         assert "p1" in progress.completed
         assert "p2" in progress.completed
         assert progress.completed["p1"].success is True
 
-    @patch("scripts.run_real_swe_experiment.run_swe_agent_single")
-    def test_resume_skips_completed(self, mock_run, tmp_path):
+    @patch("scripts.run_real_swe_experiment.run_swe_agent_batch")
+    def test_resume_skips_completed(self, mock_batch, tmp_path):
         """Test that already-completed instances are skipped on resume."""
         # Pre-populate progress with p1 completed
         progress = GroupProgress()
@@ -555,7 +556,7 @@ class TestRunGroupSequential:
 
         # Create traj for p2
         _write_traj(tmp_path, "p2", success=True, num_steps=5, cost=0.5)
-        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        mock_batch.return_value = MagicMock(returncode=0, stderr="")
 
         result = run_group_sequential(
             group="control",
@@ -563,12 +564,12 @@ class TestRunGroupSequential:
             output_dir=tmp_path,
         )
 
-        # Only p2 should have been processed by SWE-agent
-        assert mock_run.call_count == 1
+        # Batch should be called once (for remaining instance p2)
+        assert mock_batch.call_count == 1
         assert len(result.completed) == 2
 
-    @patch("scripts.run_real_swe_experiment.run_swe_agent_single")
-    def test_dry_run(self, mock_run, tmp_path):
+    @patch("scripts.run_real_swe_experiment.run_swe_agent_batch")
+    def test_dry_run(self, mock_batch, tmp_path):
         """Dry run should not invoke SWE-agent."""
         progress = run_group_sequential(
             group="control",
@@ -576,14 +577,14 @@ class TestRunGroupSequential:
             output_dir=tmp_path,
             dry_run=True,
         )
-        mock_run.assert_not_called()
+        mock_batch.assert_not_called()
         assert len(progress.completed) == 0
 
-    @patch("scripts.run_real_swe_experiment.run_swe_agent_single")
-    def test_handles_timeout(self, mock_run, tmp_path):
+    @patch("scripts.run_real_swe_experiment.run_swe_agent_batch")
+    def test_handles_timeout(self, mock_batch, tmp_path):
         """Test that subprocess timeout is handled gracefully."""
         import subprocess
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="sweagent", timeout=1800)
+        mock_batch.side_effect = subprocess.TimeoutExpired(cmd="sweagent", timeout=1800)
 
         progress = run_group_sequential(
             group="control",
@@ -595,10 +596,10 @@ class TestRunGroupSequential:
         assert "p1" in progress.failed
         assert "Timeout" in progress.failed["p1"]
 
-    @patch("scripts.run_real_swe_experiment.run_swe_agent_single")
-    def test_handles_no_traj_output(self, mock_run, tmp_path):
+    @patch("scripts.run_real_swe_experiment.run_swe_agent_batch")
+    def test_handles_no_traj_output(self, mock_batch, tmp_path):
         """Test when SWE-agent exits but produces no .traj file."""
-        mock_run.return_value = MagicMock(returncode=1, stderr="Docker error")
+        mock_batch.return_value = MagicMock(returncode=1, stderr="Docker error")
 
         progress = run_group_sequential(
             group="control",

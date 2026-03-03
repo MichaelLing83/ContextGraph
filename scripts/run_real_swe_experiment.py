@@ -414,18 +414,26 @@ def run_group_sequential(
     # Run all remaining instances in a single SWE-agent batch process.
     # SWE-agent's redo_existing=False will skip instances with existing .traj files.
     start_time = time.time()
-    proc = run_swe_agent_batch(
-        remaining, config_path, output_dir,
-        num_workers=1,
-        swe_bench_subset=swe_bench_subset,
-        swe_bench_split=swe_bench_split,
-    )
+    timed_out = False
+    try:
+        proc = run_swe_agent_batch(
+            remaining, config_path, output_dir,
+            num_workers=1,
+            swe_bench_subset=swe_bench_subset,
+            swe_bench_split=swe_bench_split,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("Batch timed out for group '%s'", group)
+        timed_out = True
+        proc = None
+
     total_time = time.time() - start_time
 
-    logger.info(
-        "Batch completed in %.0fs (exit code %d)",
-        total_time, proc.returncode,
-    )
+    if proc is not None:
+        logger.info(
+            "Batch completed in %.0fs (exit code %d)",
+            total_time, proc.returncode,
+        )
 
     # Scan output directory for results
     for instance_id in instance_ids:
@@ -442,9 +450,13 @@ def run_group_sequential(
                 instance_id, result.success, result.total_cost, result.num_steps,
             )
         elif instance_id not in progress.failed:
-            progress.failed[instance_id] = (
-                f"No .traj file (exit code {proc.returncode})"
-            )
+            if timed_out:
+                progress.failed[instance_id] = "Timeout"
+            else:
+                returncode = proc.returncode if proc else -1
+                progress.failed[instance_id] = (
+                    f"No .traj file (exit code {returncode})"
+                )
 
     _clean_progress(progress)
     progress.save(progress_file)

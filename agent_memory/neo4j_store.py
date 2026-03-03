@@ -5,7 +5,7 @@ from neo4j import GraphDatabase, Driver
 import logging
 
 if TYPE_CHECKING:
-    from agent_memory.models import Trajectory, Fragment, Methodology, ErrorPattern
+    from agent_memory.models import Trajectory, Fragment, Methodology, ErrorPattern, Strategy
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +84,8 @@ class Neo4jStore:
             "CREATE CONSTRAINT methodology_id IF NOT EXISTS FOR (m:Methodology) REQUIRE m.id IS UNIQUE",
             "CREATE CONSTRAINT error_pattern_id IF NOT EXISTS FOR (e:ErrorPattern) REQUIRE e.id IS UNIQUE",
             "CREATE CONSTRAINT community_id IF NOT EXISTS FOR (c:Community) REQUIRE c.id IS UNIQUE",
+            "CREATE CONSTRAINT strategy_id IF NOT EXISTS FOR (s:Strategy) REQUIRE s.id IS UNIQUE",
+            "CREATE CONSTRAINT playbook_entry_id IF NOT EXISTS FOR (p:PlaybookEntry) REQUIRE p.id IS UNIQUE",
 
             # Indexes for common lookups
             "CREATE INDEX trajectory_instance IF NOT EXISTS FOR (t:Trajectory) ON (t.instance_id)",
@@ -93,6 +95,8 @@ class Neo4jStore:
             "CREATE INDEX state_phase IF NOT EXISTS FOR (s:State) ON (s.phase)",
             "CREATE INDEX error_pattern_type IF NOT EXISTS FOR (e:ErrorPattern) ON (e.error_type)",
             "CREATE INDEX community_community_id IF NOT EXISTS FOR (c:Community) ON (c.community_id)",
+            "CREATE INDEX strategy_category IF NOT EXISTS FOR (s:Strategy) ON (s.category)",
+            "CREATE INDEX playbook_prefix IF NOT EXISTS FOR (p:PlaybookEntry) ON (p.prefix)",
 
             # Full-text search indexes (BM25) for keyword matching
             """
@@ -110,6 +114,14 @@ class Neo4jStore:
             """
             CREATE FULLTEXT INDEX error_keywords_text IF NOT EXISTS
             FOR (e:ErrorPattern) ON EACH [e.error_keywords_text]
+            """,
+            """
+            CREATE FULLTEXT INDEX strategy_text IF NOT EXISTS
+            FOR (s:Strategy) ON EACH [s.rule_text]
+            """,
+            """
+            CREATE FULLTEXT INDEX playbook_text IF NOT EXISTS
+            FOR (p:PlaybookEntry) ON EACH [p.text]
             """,
         ]
 
@@ -134,6 +146,22 @@ class Neo4jStore:
             f"""
             CREATE VECTOR INDEX community_embedding IF NOT EXISTS
             FOR (c:Community) ON (c.embedding)
+            OPTIONS {{indexConfig: {{
+                `vector.dimensions`: {vector_dimensions},
+                `vector.similarity_function`: 'cosine'
+            }}}}
+            """,
+            f"""
+            CREATE VECTOR INDEX strategy_embedding IF NOT EXISTS
+            FOR (s:Strategy) ON (s.embedding)
+            OPTIONS {{indexConfig: {{
+                `vector.dimensions`: {vector_dimensions},
+                `vector.similarity_function`: 'cosine'
+            }}}}
+            """,
+            f"""
+            CREATE VECTOR INDEX playbook_embedding IF NOT EXISTS
+            FOR (p:PlaybookEntry) ON (p.embedding)
             OPTIONS {{indexConfig: {{
                 `vector.dimensions`: {vector_dimensions},
                 `vector.similarity_function`: 'cosine'
@@ -247,6 +275,57 @@ class Neo4jStore:
             e.frequency = e.frequency + $frequency
         """
         self.execute_write(query, params)
+
+    def create_strategy(self, strategy: "Strategy") -> None:
+        """Create or update a Strategy node in Neo4j (idempotent)."""
+        query = """
+        MERGE (s:Strategy {id: $id})
+        SET s.rule_text = $rule_text,
+            s.category = $category,
+            s.source_trajectory_id = $source_trajectory_id,
+            s.source_repo = $source_repo,
+            s.confidence = $confidence,
+            s.embedding = $embedding
+        """
+        self.execute_write(query, strategy.to_dict())
+
+    def link_strategy_to_trajectory(self, strategy_id: str, trajectory_id: str) -> None:
+        """Create DERIVED_FROM relation from Strategy to Trajectory."""
+        query = """
+        MATCH (s:Strategy {id: $strategy_id})
+        MATCH (t:Trajectory {id: $trajectory_id})
+        CREATE (s)-[:DERIVED_FROM]->(t)
+        """
+        self.execute_write(query, {
+            "strategy_id": strategy_id,
+            "trajectory_id": trajectory_id,
+        })
+
+    def create_playbook_entry(self, entry: "PlaybookEntry") -> None:
+        """Create a PlaybookEntry node in Neo4j."""
+        query = """
+        MERGE (p:PlaybookEntry {id: $id})
+        SET p.prefix = $prefix,
+            p.section = $section,
+            p.text = $text,
+            p.embedding = $embedding
+        """
+        self.execute_write(query, entry.to_dict())
+
+    def batch_create_playbook_entries(self, entries: list) -> int:
+        """Batch create PlaybookEntry nodes. Returns count created."""
+        query = """
+        UNWIND $entries AS e
+        MERGE (p:PlaybookEntry {id: e.id})
+        SET p.prefix = e.prefix,
+            p.section = e.section,
+            p.text = e.text,
+            p.embedding = e.embedding
+        RETURN count(p) AS created
+        """
+        params = [entry.to_dict() for entry in entries]
+        results = self.execute_query(query, {"entries": params})
+        return results[0]["created"] if results else 0
 
     def link_fragment_to_error_pattern(self, fragment_id: str, error_type: str) -> None:
         """Create CAUSED_ERROR relation from Fragment to ErrorPattern with temporal properties."""

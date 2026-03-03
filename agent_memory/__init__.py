@@ -8,6 +8,8 @@ from agent_memory.models import (
     ErrorPattern,
     TemporalEdge,
     Community,
+    PlaybookEntry,
+    PLAYBOOK_SECTIONS,
 )
 from agent_memory.neo4j_store import Neo4jStore
 from agent_memory.embeddings import EmbeddingClient, get_embedding_client
@@ -19,6 +21,7 @@ from agent_memory.reranker import RerankerPipeline
 from agent_memory.formatter import StructuredContextFormatter
 from agent_memory.entity_resolver import EntityResolver
 from agent_memory.community import CommunityDetector
+from agent_memory.playbook import PlaybookRetriever, parse_playbook, format_playbook
 from agent_memory.memory import AgentMemory, MemoryContext, MemoryStats
 from agent_memory import evaluation
 
@@ -32,6 +35,8 @@ __all__ = [
     "ErrorPattern",
     "TemporalEdge",
     "Community",
+    "PlaybookEntry",
+    "PLAYBOOK_SECTIONS",
     # Store
     "Neo4jStore",
     # Embeddings
@@ -59,6 +64,10 @@ __all__ = [
     "CommunityDetector",
     # Consolidator
     "MemoryConsolidator",
+    # Playbook
+    "PlaybookRetriever",
+    "parse_playbook",
+    "format_playbook",
     # Unified API
     "AgentMemory",
     "MemoryContext",
