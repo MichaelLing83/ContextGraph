@@ -45,8 +45,7 @@ class TestQueryMemoryTool:
         output = tool.invoke(input_data)
 
         assert isinstance(output, QueryMemoryOutput)
-        assert isinstance(output.methodologies, list)
-        assert isinstance(output.similar_fragments, list)
+        assert isinstance(output.similar_experiences, list)
         assert isinstance(output.warnings, list)
         memory.close()
 
@@ -67,5 +66,24 @@ class TestQueryMemoryTool:
         assert isinstance(json_output, str)
         import json
         parsed = json.loads(json_output)
-        assert "methodologies" in parsed
+        assert "similar_experiences" in parsed
+        assert "warnings" in parsed
+        memory.close()
+
+    def test_tool_to_structured(self):
+        """Test output can be serialized to structured XML."""
+        memory = AgentMemory(neo4j_uri=None, embedding_api_key=None)
+        tool = QueryMemoryTool(memory)
+
+        input_data = QueryMemoryInput(
+            current_error="ImportError: test",
+            task_description="Fix import error",
+            phase="fixing",
+        )
+
+        output = tool.invoke(input_data)
+        structured = output.to_structured()
+
+        assert isinstance(structured, str)
+        # Without Neo4j, no experiences to show, so output should be empty
         memory.close()

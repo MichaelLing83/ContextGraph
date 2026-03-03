@@ -36,24 +36,32 @@ class MemoryContext:
     loop_warning: Optional[str] = None
 
     def to_prompt_injection(self) -> str:
-        """Generate prompt text to inject into agent context."""
+        """Generate structured XML prompt text to inject into agent context.
+
+        Uses Zep-style structured output for better LLM parsing.
+        """
+        from xml.sax.saxutils import escape as xml_escape
+
         parts = []
 
         if self.loop_warning:
-            parts.append(f"⚠️ LOOP WARNING: {self.loop_warning}")
-
-        if self.warnings:
-            parts.append("⚠️ WARNINGS:")
+            parts.append(f"<WARNINGS>\n  <warning>{xml_escape(self.loop_warning)}</warning>")
             for w in self.warnings:
-                parts.append(f"  - {w}")
+                parts.append(f"  <warning>{xml_escape(w)}</warning>")
+            parts.append("</WARNINGS>")
+        elif self.warnings:
+            parts.append("<WARNINGS>")
+            for w in self.warnings:
+                parts.append(f"  <warning>{xml_escape(w)}</warning>")
+            parts.append("</WARNINGS>")
 
-        if self.methodology_hint:
-            parts.append(f"💡 SUGGESTION: {self.methodology_hint}")
-
-        if self.suggestions:
-            parts.append("💡 SUGGESTIONS:")
+        if self.methodology_hint or self.suggestions:
+            parts.append("<SUGGESTIONS>")
+            if self.methodology_hint:
+                parts.append(f"  <methodology>{xml_escape(self.methodology_hint)}</methodology>")
             for s in self.suggestions:
-                parts.append(f"  - {s}")
+                parts.append(f"  <suggestion>{xml_escape(s)}</suggestion>")
+            parts.append("</SUGGESTIONS>")
 
         if not parts:
             return ""

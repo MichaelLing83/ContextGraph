@@ -11,6 +11,12 @@ logger = logging.getLogger(__name__)
 class EmbeddingClient(ABC):
     """Abstract base class for embedding clients."""
 
+    @property
+    @abstractmethod
+    def dimensions(self) -> int:
+        """Return the dimensionality of embeddings produced by this client."""
+        pass
+
     @abstractmethod
     def embed(self, text: str) -> List[float]:
         """Generate embedding for a single text."""
@@ -26,6 +32,10 @@ class MockEmbeddingClient(EmbeddingClient):
 
     def __init__(self, dimension: int = 256):
         self.dimension = dimension
+
+    @property
+    def dimensions(self) -> int:
+        return self.dimension
 
     def embed(self, text: str) -> List[float]:
         """Generate deterministic mock embedding based on text hash."""
@@ -44,10 +54,21 @@ class MockEmbeddingClient(EmbeddingClient):
 class OpenAIEmbeddingClient(EmbeddingClient):
     """OpenAI embedding client."""
 
+    # Known model dimensions
+    _MODEL_DIMENSIONS = {
+        "text-embedding-3-small": 1536,
+        "text-embedding-3-large": 3072,
+        "text-embedding-ada-002": 1536,
+    }
+
     def __init__(self, api_key: str, model: str = "text-embedding-3-small"):
         self.api_key = api_key
         self.model = model
         self._client = None
+
+    @property
+    def dimensions(self) -> int:
+        return self._MODEL_DIMENSIONS.get(self.model, 1536)
 
     @property
     def client(self):

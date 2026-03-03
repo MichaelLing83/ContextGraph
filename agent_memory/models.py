@@ -214,6 +214,81 @@ class Methodology:
 
 
 @dataclass
+class TemporalEdge:
+    """Temporal validity metadata for graph edges (Dual Timeline model).
+
+    t_created: When the edge was first observed
+    t_valid:   When the edge became valid (usually same as t_created)
+    t_invalid: When the edge was invalidated (None if still valid)
+    t_expired: When the edge was fully expired/archived (None if not expired)
+    """
+
+    t_created: Optional[datetime] = None
+    t_valid: Optional[datetime] = None
+    t_invalid: Optional[datetime] = None
+    t_expired: Optional[datetime] = None
+
+    def is_valid(self) -> bool:
+        """Check if this edge is currently valid (not invalidated)."""
+        return self.t_invalid is None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "t_created": self.t_created.isoformat() if self.t_created else None,
+            "t_valid": self.t_valid.isoformat() if self.t_valid else None,
+            "t_invalid": self.t_invalid.isoformat() if self.t_invalid else None,
+            "t_expired": self.t_expired.isoformat() if self.t_expired else None,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "TemporalEdge":
+        def parse_dt(val):
+            if isinstance(val, str):
+                return datetime.fromisoformat(val)
+            return val
+
+        return cls(
+            t_created=parse_dt(d.get("t_created")),
+            t_valid=parse_dt(d.get("t_valid")),
+            t_invalid=parse_dt(d.get("t_invalid")),
+            t_expired=parse_dt(d.get("t_expired")),
+        )
+
+
+@dataclass
+class Community:
+    """Community node — a group of related fragments detected via label propagation."""
+
+    id: str
+    community_id: int
+    summary: str
+    node_count: int = 0
+    error_types: List[str] = field(default_factory=list)
+    embedding: Optional[List[float]] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "community_id": self.community_id,
+            "summary": self.summary,
+            "node_count": self.node_count,
+            "error_types": self.error_types,
+            "embedding": self.embedding,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "Community":
+        return cls(
+            id=d["id"],
+            community_id=d["community_id"],
+            summary=d["summary"],
+            node_count=d.get("node_count", 0),
+            error_types=d.get("error_types", []),
+            embedding=d.get("embedding"),
+        )
+
+
+@dataclass
 class ErrorPattern:
     """Known error pattern - for matching and statistics."""
 

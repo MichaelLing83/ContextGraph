@@ -37,9 +37,11 @@ class MemoryWriter:
         self,
         store: Optional["Neo4jStore"],
         embedder: Optional["EmbeddingClient"],
+        entity_resolver: Optional[Any] = None,
     ):
         self.store = store
         self.embedder = embedder
+        self.entity_resolver = entity_resolver
 
     def write_trajectory(self, raw: RawTrajectory) -> str:
         """
@@ -75,7 +77,20 @@ class MemoryWriter:
             for frag in fragments:
                 frag.embedding = self.embedder.embed(frag.description)
 
-        # 5. Write to store
+        # 5. Entity resolution on error patterns (deduplicate before writing)
+        if self.entity_resolver:
+            resolved_patterns = []
+            for pattern in error_patterns:
+                resolved, is_new = self.entity_resolver.resolve_error_pattern(pattern)
+                if is_new:
+                    resolved_patterns.append(resolved)
+                else:
+                    # Update existing pattern in store with merged data
+                    if self.store:
+                        self.store.create_error_pattern(resolved)  # MERGE handles update
+            error_patterns = resolved_patterns
+
+        # 6. Write to store
         if self.store:
             self.store.create_trajectory(trajectory)
             for frag in fragments:

@@ -11,6 +11,9 @@ from agent_memory.writer import MemoryWriter, RawTrajectory
 from agent_memory.retriever import MemoryRetriever
 from agent_memory.consolidator import MemoryConsolidator
 from agent_memory.loop_detector import LoopDetector, LoopInfo
+from agent_memory.entity_resolver import EntityResolver
+from agent_memory.community import CommunityDetector
+from agent_memory.formatter import StructuredContextFormatter
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +29,23 @@ class MemoryContext:
     def has_suggestions(self) -> bool:
         return bool(self.methodologies)
 
+    def to_structured(self) -> str:
+        """Return structured XML representation of this context."""
+        from agent_memory.retriever import RetrievalResult, EnrichedFragment
+        # Convert similar_fragments to enriched_fragments for the formatter
+        enriched = [
+            EnrichedFragment(fragment=f, relevance_score=max(0.0, 0.8 - (i * 0.1)))
+            for i, f in enumerate(self.similar_fragments)
+        ]
+        result = RetrievalResult(
+            methodologies=self.methodologies,
+            similar_fragments=self.similar_fragments,
+            enriched_fragments=enriched,
+            warnings=self.warnings,
+        )
+        formatter = StructuredContextFormatter()
+        return formatter.format(result)
+
 
 @dataclass
 class MemoryStats:
@@ -35,11 +55,20 @@ class MemoryStats:
     failure_patterns: list = field(default_factory=list)
     total_trajectories: int = 0
     total_methodologies: int = 0
+    total_communities: int = 0
 
 
 class AgentMemory:
     """
     Agent Long-term Memory - Unified API.
+
+    Zep-optimized architecture:
+      - Triple-search retrieval (cosine + BM25 + BFS + community)
+      - Reranking pipeline (RRF + MMR + node distance boost)
+      - Entity resolution (semantic deduplication)
+      - Community detection (label propagation)
+      - Temporal validity (dual timeline edges)
+      - Structured context output (XML-tagged)
 
     Usage:
         memory = AgentMemory(neo4j_uri="bolt://localhost:7687", embedding_api_key="...")
@@ -59,25 +88,38 @@ class AgentMemory:
         embedding_api_key: Optional[str] = None,
         consolidate_every: int = 16,
     ):
-        # Initialize store
-        if neo4j_uri:
-            self.store = Neo4jStore(uri=neo4j_uri, auth=neo4j_auth)
-            self.store.init_schema()
-        else:
-            self.store = None
-            logger.warning("Running without Neo4j store (mock mode)")
-
-        # Initialize embedder
+        # Initialize embedder first (needed for schema dimensions)
         if embedding_api_key:
             self.embedder = get_embedding_client("openai", api_key=embedding_api_key)
         else:
             self.embedder = get_embedding_client("mock")
             logger.warning("Using mock embedder")
 
-        # Initialize components
-        self.writer = MemoryWriter(self.store, self.embedder)
+        # Initialize store
+        if neo4j_uri:
+            self.store = Neo4jStore(uri=neo4j_uri, auth=neo4j_auth)
+            self.store.init_schema(vector_dimensions=self.embedder.dimensions)
+        else:
+            self.store = None
+            logger.warning("Running without Neo4j store (mock mode)")
+
+        # Initialize entity resolver
+        self.entity_resolver = EntityResolver(self.store, self.embedder)
+
+        # Initialize community detector
+        self.community_detector = CommunityDetector(self.store, self.embedder)
+
+        # Initialize formatter
+        self.formatter = StructuredContextFormatter()
+
+        # Initialize components (with entity resolver)
+        self.writer = MemoryWriter(
+            self.store, self.embedder, entity_resolver=self.entity_resolver
+        )
         self.retriever = MemoryRetriever(self.store, self.embedder)
-        self.consolidator = MemoryConsolidator(self.store, self.embedder)
+        self.consolidator = MemoryConsolidator(
+            self.store, self.embedder, entity_resolver=self.entity_resolver
+        )
         self.loop_detector = LoopDetector()
 
         # Consolidation tracking
@@ -108,6 +150,19 @@ class AgentMemory:
             warnings=result.warnings,
         )
 
+    def query_structured(self, current_state: State) -> str:
+        """Query memory and return structured XML context.
+
+        Convenience method that returns token-efficient XML output
+        suitable for direct injection into agent prompts.
+        """
+        if self.embedder and not current_state.embedding:
+            situation_str = current_state.to_situation_string()
+            current_state.embedding = self.embedder.embed(situation_str)
+
+        result = self.retriever.retrieve(current_state)
+        return self.formatter.format(result)
+
     def check_loop(self, state_history: List[State]) -> Optional[LoopInfo]:
         """
         Check if agent is stuck in a loop.
@@ -125,17 +180,36 @@ class AgentMemory:
         """
         Learn from a completed trajectory.
 
-        1. Writes trajectory and fragments to memory
-        2. Triggers consolidation every N trajectories
+        1. Writes trajectory and fragments to memory (with entity resolution)
+        2. Assigns new fragments to communities
+        3. Triggers consolidation every N trajectories
 
         Returns the trajectory ID.
         """
         traj_id = self.writer.write_trajectory(trajectory)
 
+        # Assign new fragments to communities incrementally
+        if self.store and self.community_detector:
+            try:
+                query = """
+                MATCH (t:Trajectory {id: $traj_id})-[:HAS_FRAGMENT]->(f:Fragment)
+                RETURN f.id AS fid
+                """
+                results = self.store.execute_query(query, {"traj_id": traj_id})
+                for r in results:
+                    fid = r.get("fid")
+                    if fid:
+                        self.community_detector.assign_new_node(fid)
+            except Exception as e:
+                logger.debug("Community assignment note: %s", e)
+
         self._trajectory_count += 1
         if self._trajectory_count % self._consolidate_every == 0:
             logger.info(f"Triggering consolidation (every {self._consolidate_every} trajectories)")
             self.consolidator.consolidate()
+            # Refresh communities periodically
+            if self._trajectory_count % (self._consolidate_every * 4) == 0:
+                self.community_detector.refresh_communities()
 
         return traj_id
 
@@ -154,10 +228,14 @@ class AgentMemory:
             meth_count = self.store.execute_query(
                 "MATCH (m:Methodology) RETURN count(m) as count"
             )
+            comm_count = self.store.execute_query(
+                "MATCH (c:Community) RETURN count(c) as count"
+            )
 
             return MemoryStats(
                 total_trajectories=traj_count[0]["count"] if traj_count else 0,
                 total_methodologies=meth_count[0]["count"] if meth_count else 0,
+                total_communities=comm_count[0]["count"] if comm_count else 0,
             )
         except Exception as e:
             logger.warning(f"Failed to get stats: {e}")

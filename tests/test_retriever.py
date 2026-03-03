@@ -1,6 +1,6 @@
 """Tests for MemoryRetriever."""
 
-from agent_memory.retriever import MemoryRetriever, RetrievalResult
+from agent_memory.retriever import MemoryRetriever, RetrievalResult, ScoredResult
 from agent_memory.models import State, Methodology
 
 
@@ -168,3 +168,127 @@ class TestMemoryRetriever:
         # f1 should rank higher (keywords overlap: django, import, settings)
         assert results[0].fragment.id == "f1"
         assert results[0].relevance_score > results[1].relevance_score
+
+
+class TestTripleSearch:
+    """Tests for the triple-search channels."""
+
+    def test_check_vector_index_false_without_store(self):
+        """Vector index check returns False without store."""
+        retriever = MemoryRetriever(store=None, embedder=None)
+        assert retriever._check_vector_index() is False
+
+    def test_check_vector_index_caches_result(self):
+        """Vector index check should cache the result."""
+        call_count = 0
+
+        class DummyStore:
+            def execute_query(self, query, parameters=None):
+                nonlocal call_count
+                call_count += 1
+                return []  # No indexes
+
+        retriever = MemoryRetriever(store=DummyStore(), embedder=None)
+        assert retriever._check_vector_index() is False
+        assert retriever._check_vector_index() is False
+        assert call_count == 1
+
+    def test_build_query_text(self):
+        """Test query text construction from state."""
+        retriever = MemoryRetriever(store=None, embedder=None)
+        state = State(
+            tools=["bash"],
+            repo_summary="Django web framework",
+            task_description="Fix import error",
+            current_error="ImportError: no module named foo",
+            phase="fixing",
+        )
+
+        text = retriever._build_query_text(state)
+        assert "ImportError" in text
+        assert "Fix import error" in text
+        assert "Django" in text
+
+    def test_escape_lucene(self):
+        """Test Lucene special character escaping."""
+        retriever = MemoryRetriever(store=None, embedder=None)
+
+        assert retriever._escape_lucene("hello world") == "hello world"
+        assert "\\" in retriever._escape_lucene("hello+world")
+        assert "\\" in retriever._escape_lucene('test "quoted"')
+
+    def test_simple_merge_deduplicates(self):
+        """Simple merge should keep highest-scored entry per node_id."""
+        retriever = MemoryRetriever(store=None, embedder=None)
+
+        results = [
+            ScoredResult("f1", "Fragment", 0.9, "cosine"),
+            ScoredResult("f1", "Fragment", 0.7, "bm25"),
+            ScoredResult("f2", "Fragment", 0.8, "cosine"),
+        ]
+
+        merged = retriever._simple_merge(results, top_k=2)
+        assert len(merged) == 2
+        assert merged[0].node_id == "f1"
+        assert merged[0].score == 0.9
+
+    def test_search_cosine_without_store(self):
+        """Cosine search returns empty without store."""
+        retriever = MemoryRetriever(store=None, embedder=None)
+        assert retriever._search_cosine([1.0, 0.0]) == []
+
+    def test_search_cosine_without_embedding(self):
+        """Cosine search returns empty without embedding."""
+        retriever = MemoryRetriever(store=None, embedder=None)
+        assert retriever._search_cosine(None) == []
+
+    def test_search_bm25_without_store(self):
+        """BM25 search returns empty without store."""
+        retriever = MemoryRetriever(store=None, embedder=None)
+        assert retriever._search_bm25("test query") == []
+
+    def test_search_bfs_without_store(self):
+        """BFS search returns empty without store."""
+        retriever = MemoryRetriever(store=None, embedder=None)
+        assert retriever._search_bfs(["f1", "f2"]) == []
+
+    def test_search_community_without_store(self):
+        """Community search returns empty without store."""
+        retriever = MemoryRetriever(store=None, embedder=None)
+        assert retriever._search_community([1.0, 0.0]) == []
+
+    def test_fallback_to_legacy_without_vector_indexes(self):
+        """Without vector indexes, should use legacy retrieval."""
+        class DummyStore:
+            def execute_query(self, query, parameters=None):
+                if "SHOW INDEXES" in query:
+                    return []  # No vector indexes
+                return []
+
+        retriever = MemoryRetriever(store=DummyStore(), embedder=None)
+        state = State(
+            tools=["bash"],
+            repo_summary="Test repo",
+            task_description="Fix bug",
+            current_error="",
+            phase="fixing",
+        )
+
+        result = retriever.retrieve(state)
+        assert result.is_empty()
+
+    def test_scored_to_enriched_filters_non_fragments(self):
+        """Only Fragment-type ScoredResults should convert to EnrichedFragments."""
+        retriever = MemoryRetriever(store=None, embedder=None)
+
+        scored = [
+            ScoredResult("f1", "Fragment", 0.9, "cosine", node_data={
+                "f": {"id": "f1", "step_range": [0, 1], "fragment_type": "error_recovery",
+                      "description": "test", "action_sequence": [], "outcome": "success"},
+            }),
+            ScoredResult("c1", "Community", 0.5, "community", node_data={}),
+        ]
+
+        enriched = retriever._scored_to_enriched(scored)
+        assert len(enriched) == 1
+        assert enriched[0].fragment.id == "f1"

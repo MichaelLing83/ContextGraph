@@ -70,8 +70,12 @@ class Neo4jStore:
         with self.driver.session(database=self.database) as session:
             session.execute_write(lambda tx: tx.run(query, parameters or {}))
 
-    def init_schema(self) -> None:
-        """Initialize Neo4j schema with constraints and indexes."""
+    def init_schema(self, vector_dimensions: int = 1536) -> None:
+        """Initialize Neo4j schema with constraints, indexes, and vector indexes.
+
+        Args:
+            vector_dimensions: Dimensionality of embedding vectors (1536 for OpenAI, 256 for Mock).
+        """
         schema_queries = [
             # Uniqueness constraints
             "CREATE CONSTRAINT trajectory_id IF NOT EXISTS FOR (t:Trajectory) REQUIRE t.id IS UNIQUE",
@@ -79,6 +83,7 @@ class Neo4jStore:
             # Note: State nodes are not persisted with id field, so no constraint needed
             "CREATE CONSTRAINT methodology_id IF NOT EXISTS FOR (m:Methodology) REQUIRE m.id IS UNIQUE",
             "CREATE CONSTRAINT error_pattern_id IF NOT EXISTS FOR (e:ErrorPattern) REQUIRE e.id IS UNIQUE",
+            "CREATE CONSTRAINT community_id IF NOT EXISTS FOR (c:Community) REQUIRE c.id IS UNIQUE",
 
             # Indexes for common lookups
             "CREATE INDEX trajectory_instance IF NOT EXISTS FOR (t:Trajectory) ON (t.instance_id)",
@@ -87,11 +92,52 @@ class Neo4jStore:
             "CREATE INDEX fragment_type IF NOT EXISTS FOR (f:Fragment) ON (f.fragment_type)",
             "CREATE INDEX state_phase IF NOT EXISTS FOR (s:State) ON (s.phase)",
             "CREATE INDEX error_pattern_type IF NOT EXISTS FOR (e:ErrorPattern) ON (e.error_type)",
+            "CREATE INDEX community_community_id IF NOT EXISTS FOR (c:Community) ON (c.community_id)",
 
-            # Full-text search indexes (for keyword matching)
+            # Full-text search indexes (BM25) for keyword matching
             """
             CREATE FULLTEXT INDEX methodology_situation IF NOT EXISTS
             FOR (m:Methodology) ON EACH [m.situation, m.strategy]
+            """,
+            """
+            CREATE FULLTEXT INDEX fragment_description IF NOT EXISTS
+            FOR (f:Fragment) ON EACH [f.description]
+            """,
+            """
+            CREATE FULLTEXT INDEX trajectory_summary IF NOT EXISTS
+            FOR (t:Trajectory) ON EACH [t.summary]
+            """,
+            """
+            CREATE FULLTEXT INDEX error_keywords_text IF NOT EXISTS
+            FOR (e:ErrorPattern) ON EACH [e.error_keywords_text]
+            """,
+        ]
+
+        # Vector indexes (Neo4j 5.11+)
+        vector_queries = [
+            f"""
+            CREATE VECTOR INDEX fragment_embedding IF NOT EXISTS
+            FOR (f:Fragment) ON (f.embedding)
+            OPTIONS {{indexConfig: {{
+                `vector.dimensions`: {vector_dimensions},
+                `vector.similarity_function`: 'cosine'
+            }}}}
+            """,
+            f"""
+            CREATE VECTOR INDEX trajectory_embedding IF NOT EXISTS
+            FOR (t:Trajectory) ON (t.embedding)
+            OPTIONS {{indexConfig: {{
+                `vector.dimensions`: {vector_dimensions},
+                `vector.similarity_function`: 'cosine'
+            }}}}
+            """,
+            f"""
+            CREATE VECTOR INDEX community_embedding IF NOT EXISTS
+            FOR (c:Community) ON (c.embedding)
+            OPTIONS {{indexConfig: {{
+                `vector.dimensions`: {vector_dimensions},
+                `vector.similarity_function`: 'cosine'
+            }}}}
             """,
         ]
 
@@ -103,7 +149,15 @@ class Neo4jStore:
                 # Some queries may fail if already exists, that's OK
                 logger.debug(f"Schema query note: {e}")
 
-        logger.info("Neo4j schema initialized")
+        for query in vector_queries:
+            try:
+                self.execute_write(query.strip())
+                logger.debug(f"Created vector index: {query[:60]}...")
+            except Exception as e:
+                # Vector indexes may not be supported on older Neo4j versions
+                logger.debug(f"Vector index note (may require Neo4j 5.11+): {e}")
+
+        logger.info("Neo4j schema initialized (vector_dimensions=%d)", vector_dimensions)
 
     def create_trajectory(self, trajectory: "Trajectory") -> None:
         """Create a Trajectory node in Neo4j."""
@@ -136,7 +190,7 @@ class Neo4jStore:
         return Trajectory.from_dict(node_data)
 
     def create_fragment(self, fragment: "Fragment", trajectory_id: str) -> None:
-        """Create a Fragment node and link to Trajectory."""
+        """Create a Fragment node and link to Trajectory with temporal edge."""
         query = """
         MATCH (t:Trajectory {id: $trajectory_id})
         CREATE (f:Fragment {
@@ -148,7 +202,7 @@ class Neo4jStore:
             outcome: $outcome,
             embedding: $embedding
         })
-        CREATE (t)-[:HAS_FRAGMENT]->(f)
+        CREATE (t)-[:HAS_FRAGMENT {t_created: datetime(), t_valid: datetime()}]->(f)
         """
         params = fragment.to_dict()
         params["trajectory_id"] = trajectory_id
@@ -172,24 +226,60 @@ class Neo4jStore:
 
     def create_error_pattern(self, error_pattern: "ErrorPattern") -> None:
         """Create an ErrorPattern node."""
+        params = error_pattern.to_dict()
+        # Add error_keywords_text for BM25 full-text indexing
+        params["error_keywords_text"] = " ".join(error_pattern.error_keywords)
         query = """
         MERGE (e:ErrorPattern {error_type: $error_type})
         ON CREATE SET
             e.id = $id,
             e.error_keywords = $error_keywords,
+            e.error_keywords_text = $error_keywords_text,
             e.context = $context,
             e.frequency = $frequency
         ON MATCH SET
             e.error_keywords = e.error_keywords + [kw IN $error_keywords WHERE NOT kw IN e.error_keywords],
+            e.error_keywords_text = REDUCE(
+                s = '',
+                kw IN e.error_keywords + [kw IN $error_keywords WHERE NOT kw IN e.error_keywords] |
+                CASE WHEN s = '' THEN kw ELSE s + ' ' + kw END
+            ),
             e.frequency = e.frequency + $frequency
         """
-        self.execute_write(query, error_pattern.to_dict())
+        self.execute_write(query, params)
 
     def link_fragment_to_error_pattern(self, fragment_id: str, error_type: str) -> None:
-        """Create CAUSED_ERROR relation from Fragment to ErrorPattern."""
+        """Create CAUSED_ERROR relation from Fragment to ErrorPattern with temporal properties."""
         query = """
         MATCH (f:Fragment {id: $fragment_id})
         MATCH (e:ErrorPattern {error_type: $error_type})
-        MERGE (f)-[:CAUSED_ERROR]->(e)
+        MERGE (f)-[r:CAUSED_ERROR]->(e)
+        ON CREATE SET r.t_created = datetime(), r.t_valid = datetime()
         """
         self.execute_write(query, {"fragment_id": fragment_id, "error_type": error_type})
+
+    def expire_contradictions(
+        self, error_type: str, new_methodology_id: str
+    ) -> int:
+        """Invalidate old RESOLVED_BY edges when a new methodology supersedes.
+
+        Sets t_invalid on old RESOLVED_BY edges for the same error_type,
+        keeping only the newest methodology active.
+
+        Returns the number of edges invalidated.
+        """
+        query = """
+        MATCH (e:ErrorPattern {error_type: $error_type})-[r:RESOLVED_BY]->(m:Methodology)
+        WHERE m.id <> $new_methodology_id AND r.t_invalid IS NULL
+        SET r.t_invalid = datetime()
+        RETURN count(r) AS expired
+        """
+        try:
+            results = self.execute_query(query, {
+                "error_type": error_type,
+                "new_methodology_id": new_methodology_id,
+            })
+            return results[0]["expired"] if results else 0
+        except Exception as e:
+            logger.debug("expire_contradictions failed: %s", e)
+            return 0

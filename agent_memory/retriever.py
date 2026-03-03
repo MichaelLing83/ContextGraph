@@ -1,8 +1,18 @@
-"""Memory Retriever - multi-dimensional search with keyword-overlap ranking."""
+"""Memory Retriever - triple-search (cosine, BM25, BFS) with reranking.
+
+Zep-inspired architecture:
+  1. phi_cos  — vector similarity via Neo4j vector index
+  2. phi_bm25 — BM25 full-text search via Neo4j full-text index
+  3. phi_bfs  — breadth-first graph traversal from seed nodes
+  4. phi_community — community-level retrieval (added in Phase 7)
+
+Falls back to keyword-only retrieval when vector indexes are absent.
+"""
 
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Set, TYPE_CHECKING
 import re
+import time
 import logging
 
 from agent_memory.models import State, Methodology, Fragment
@@ -30,6 +40,18 @@ _STOP_WORDS: Set[str] = {
     "what", "which", "who", "whom", "these", "those",
     "file", "error", "test", "tests", "line", "code",
 }
+
+
+@dataclass
+class ScoredResult:
+    """A scored node returned from a search channel."""
+
+    node_id: str
+    node_type: str          # "Fragment", "Trajectory", "Community"
+    score: float
+    source: str             # "cosine", "bm25", "bfs", "community"
+    node_data: Dict[str, Any] = field(default_factory=dict)
+    hop_distance: int = 0   # for BFS results
 
 
 @dataclass
@@ -66,7 +88,16 @@ class RetrievalResult:
 
 
 class MemoryRetriever:
-    """Retrieve relevant memories using multiple dimensions."""
+    """Retrieve relevant memories using triple-search + reranking.
+
+    When vector indexes are available, uses:
+      1. Cosine similarity (phi_cos)
+      2. BM25 full-text search (phi_bm25)
+      3. BFS graph traversal (phi_bfs)
+      4. Community-level search (phi_community)
+
+    Falls back to legacy keyword-only retrieval otherwise.
+    """
 
     def __init__(
         self,
@@ -75,20 +106,325 @@ class MemoryRetriever:
     ):
         self.store = store
         self.embedder = embedder
+        self._vector_index_checked = False
+        self._has_vector_indexes = False
+        self._vector_index_check_time = 0.0
+        self._vector_index_ttl = 300.0  # Re-check every 5 minutes
+        # Reuse a single RerankerPipeline instance across calls
+        from agent_memory.reranker import RerankerPipeline
+        self._reranker = RerankerPipeline()
+
+    # ------------------------------------------------------------------
+    # Main retrieve entry point
+    # ------------------------------------------------------------------
 
     def retrieve(self, current_state: State, top_k: int = 5) -> RetrievalResult:
-        """
-        Retrieve relevant memories for current state.
+        """Retrieve relevant memories for current state.
 
-        Uses two dimensions:
-        1. Error-based: Find fragments from successful trajectories that handled
-           the same error type, ranked by keyword overlap with the actual error.
-        2. Task-based: Match by task description keywords against trajectory summaries.
+        Uses triple-search (cosine + BM25 + BFS) when vector indexes are
+        available, otherwise falls back to keyword-only retrieval.
         """
         result = RetrievalResult()
 
         if not self.store:
             return result
+
+        # Check if we can use advanced retrieval
+        if self._check_vector_index():
+            result = self._retrieve_triple_search(current_state, top_k)
+        else:
+            result = self._retrieve_legacy(current_state, top_k)
+
+        # Add warnings for potential failure patterns
+        result.warnings = self._get_warnings(current_state)
+
+        return result
+
+    # ------------------------------------------------------------------
+    # Triple-search retrieval (Zep-inspired)
+    # ------------------------------------------------------------------
+
+    def _retrieve_triple_search(
+        self, current_state: State, top_k: int
+    ) -> RetrievalResult:
+        """Advanced triple-search retrieval using cosine, BM25, and BFS."""
+        result = RetrievalResult()
+
+        # Build query text from state
+        query_text = self._build_query_text(current_state)
+        query_embedding = current_state.embedding
+        if not query_embedding and self.embedder:
+            query_embedding = self.embedder.embed(query_text)
+
+        # Channel 1: Cosine similarity search
+        cosine_results = self._search_cosine(query_embedding, top_k=20)
+
+        # Channel 2: BM25 full-text search
+        bm25_results = self._search_bm25(query_text, top_k=20)
+
+        # Channel 3: BFS from seed nodes (top cosine + BM25 results)
+        seed_ids = set()
+        for sr in (cosine_results[:5] + bm25_results[:5]):
+            seed_ids.add(sr.node_id)
+        bfs_results = self._search_bfs(list(seed_ids), top_k=20)
+
+        # Channel 4: Community search (if communities exist)
+        community_results = self._search_community(query_embedding, top_k=10)
+
+        # Collect all ScoredResults for reranking
+        all_scored = cosine_results + bm25_results + bfs_results + community_results
+
+        # Use reranker to merge and diversify results
+        reranked = self._reranker.rerank(
+            cosine_results=cosine_results,
+            bm25_results=bm25_results,
+            bfs_results=bfs_results,
+            community_results=community_results,
+            query_embedding=query_embedding,
+            top_k=top_k,
+        )
+        # Convert reranked ScoredResults to EnrichedFragments
+        result.enriched_fragments = self._scored_to_enriched(reranked)
+
+        # Populate similar_fragments for backward compat
+        result.similar_fragments = [
+            ef.fragment for ef in result.enriched_fragments
+        ]
+
+        return result
+
+    def _search_cosine(
+        self, query_embedding: Optional[List[float]], top_k: int = 20
+    ) -> List[ScoredResult]:
+        """Vector similarity search using Neo4j vector index."""
+        if not self.store or not query_embedding:
+            return []
+
+        query = """
+        CALL db.index.vector.queryNodes('fragment_embedding', $k, $embedding)
+        YIELD node, score
+        WHERE node.embedding IS NOT NULL
+        // Exclude fragments whose HAS_FRAGMENT edge has been invalidated
+        AND NOT EXISTS {
+            MATCH (:Trajectory)-[r:HAS_FRAGMENT]->(node) WHERE r.t_invalid IS NOT NULL
+        }
+        OPTIONAL MATCH (t:Trajectory)-[:HAS_FRAGMENT]->(node)
+        RETURN node{.*, __node_id: node.id} AS f,
+               score,
+               t.instance_id AS instance_id,
+               t.repo AS repo,
+               coalesce(t.summary, '') AS summary
+        LIMIT $k
+        """
+        try:
+            results = self.store.execute_query(query, {
+                "k": top_k,
+                "embedding": query_embedding,
+            })
+        except Exception as e:
+            logger.debug("Cosine search failed: %s", e)
+            return []
+
+        scored = []
+        for r in results:
+            f_data = r.get("f", {})
+            node_id = f_data.get("__node_id", f_data.get("id", ""))
+            scored.append(ScoredResult(
+                node_id=node_id,
+                node_type="Fragment",
+                score=r.get("score", 0.0),
+                source="cosine",
+                node_data={
+                    "f": {k: v for k, v in f_data.items() if k != "__node_id"},
+                    "instance_id": r.get("instance_id", ""),
+                    "repo": r.get("repo", ""),
+                    "summary": r.get("summary", ""),
+                },
+            ))
+        return scored
+
+    def _search_bm25(self, query_text: str, top_k: int = 20) -> List[ScoredResult]:
+        """BM25 full-text search on Fragment descriptions."""
+        if not self.store or not query_text:
+            return []
+
+        # Escape special Lucene characters for BM25 query
+        safe_query = self._escape_lucene(query_text)
+        if not safe_query.strip():
+            return []
+
+        query = """
+        CALL db.index.fulltext.queryNodes('fragment_description', $query)
+        YIELD node, score
+        OPTIONAL MATCH (t:Trajectory)-[:HAS_FRAGMENT]->(node)
+        RETURN node{.*, __node_id: node.id} AS f,
+               score,
+               t.instance_id AS instance_id,
+               t.repo AS repo,
+               coalesce(t.summary, '') AS summary
+        LIMIT $k
+        """
+        try:
+            results = self.store.execute_query(query, {
+                "query": safe_query,
+                "k": top_k,
+            })
+        except Exception as e:
+            logger.debug("BM25 search failed: %s", e)
+            return []
+
+        scored = []
+        for r in results:
+            f_data = r.get("f", {})
+            node_id = f_data.get("__node_id", f_data.get("id", ""))
+            scored.append(ScoredResult(
+                node_id=node_id,
+                node_type="Fragment",
+                score=r.get("score", 0.0),
+                source="bm25",
+                node_data={
+                    "f": {k: v for k, v in f_data.items() if k != "__node_id"},
+                    "instance_id": r.get("instance_id", ""),
+                    "repo": r.get("repo", ""),
+                    "summary": r.get("summary", ""),
+                },
+            ))
+        return scored
+
+    def _search_bfs(
+        self,
+        seed_node_ids: List[str],
+        top_k: int = 20,
+    ) -> List[ScoredResult]:
+        """BFS graph traversal from seed nodes (2-hop).
+
+        Traverses:
+          Fragment→CAUSED_ERROR→ErrorPattern←CAUSED_ERROR←Fragment (sibling errors)
+          Fragment←HAS_FRAGMENT←Trajectory→HAS_FRAGMENT→Fragment (sibling fragments)
+
+        Score = 1.0 / (1 + hop_distance)
+        """
+        if not self.store or not seed_node_ids:
+            return []
+
+        query = """
+        UNWIND $seed_ids AS seed_id
+        MATCH (seed:Fragment {id: seed_id})
+        CALL {
+            WITH seed
+            // Path 1: sibling fragments via shared ErrorPattern
+            OPTIONAL MATCH (seed)-[:CAUSED_ERROR]->(e:ErrorPattern)<-[:CAUSED_ERROR]-(sibling:Fragment)
+            WHERE sibling.id <> seed.id
+            RETURN sibling AS neighbor, 2 AS hops, 'error_sibling' AS path_type
+
+            UNION
+
+            WITH seed
+            // Path 2: sibling fragments via shared Trajectory
+            OPTIONAL MATCH (t:Trajectory)-[:HAS_FRAGMENT]->(seed)
+            WITH seed, t
+            WHERE t IS NOT NULL
+            MATCH (t)-[:HAS_FRAGMENT]->(sibling:Fragment)
+            WHERE sibling.id <> seed.id
+            RETURN sibling AS neighbor, 2 AS hops, 'trajectory_sibling' AS path_type
+        }
+        WITH neighbor, hops, path_type
+        WHERE neighbor IS NOT NULL
+        OPTIONAL MATCH (t2:Trajectory)-[:HAS_FRAGMENT]->(neighbor)
+        RETURN DISTINCT neighbor{.*, __node_id: neighbor.id} AS f,
+               hops,
+               path_type,
+               t2.instance_id AS instance_id,
+               t2.repo AS repo,
+               coalesce(t2.summary, '') AS summary
+        LIMIT $k
+        """
+        try:
+            results = self.store.execute_query(query, {
+                "seed_ids": seed_node_ids[:10],  # cap seeds
+                "k": top_k,
+            })
+        except Exception as e:
+            logger.debug("BFS search failed: %s", e)
+            return []
+
+        scored = []
+        seen_ids = set()
+        for r in results:
+            f_data = r.get("f", {})
+            node_id = f_data.get("__node_id", f_data.get("id", ""))
+            if node_id in seen_ids or node_id in set(seed_node_ids):
+                continue
+            seen_ids.add(node_id)
+
+            hops = r.get("hops", 2)
+            score = 1.0 / (1 + hops)
+
+            scored.append(ScoredResult(
+                node_id=node_id,
+                node_type="Fragment",
+                score=score,
+                source="bfs",
+                hop_distance=hops,
+                node_data={
+                    "f": {k: v for k, v in f_data.items() if k != "__node_id"},
+                    "instance_id": r.get("instance_id", ""),
+                    "repo": r.get("repo", ""),
+                    "summary": r.get("summary", ""),
+                },
+            ))
+        return scored
+
+    def _search_community(
+        self, query_embedding: Optional[List[float]], top_k: int = 10
+    ) -> List[ScoredResult]:
+        """Community-level search: find relevant communities, then their members."""
+        if not self.store or not query_embedding:
+            return []
+
+        n_communities = min(top_k, 5)
+        query = """
+        CALL db.index.vector.queryNodes('community_embedding', $n_communities, $embedding)
+        YIELD node AS community, score
+        MATCH (member:Fragment)-[:IN_COMMUNITY]->(community)
+        RETURN member{.*, __node_id: member.id} AS f,
+               score * 0.8 AS score,
+               community.summary AS community_summary
+        LIMIT $member_limit
+        """
+        try:
+            results = self.store.execute_query(query, {
+                "n_communities": n_communities,
+                "embedding": query_embedding,
+                "member_limit": top_k,
+            })
+        except Exception as e:
+            logger.debug("Community search failed (expected if no communities): %s", e)
+            return []
+
+        scored = []
+        for r in results:
+            f_data = r.get("f", {})
+            node_id = f_data.get("__node_id", f_data.get("id", ""))
+            scored.append(ScoredResult(
+                node_id=node_id,
+                node_type="Fragment",
+                score=r.get("score", 0.0),
+                source="community",
+                node_data={
+                    "f": {k: v for k, v in f_data.items() if k != "__node_id"},
+                    "community_summary": r.get("community_summary", ""),
+                },
+            ))
+        return scored
+
+    # ------------------------------------------------------------------
+    # Legacy retrieval (backward compat)
+    # ------------------------------------------------------------------
+
+    def _retrieve_legacy(self, current_state: State, top_k: int) -> RetrievalResult:
+        """Legacy keyword-only retrieval (original implementation)."""
+        result = RetrievalResult()
 
         # 1. Error-based retrieval (keyword-ranked)
         if current_state.current_error:
@@ -111,9 +447,6 @@ class MemoryRetriever:
         result.similar_fragments = [
             ef.fragment for ef in result.enriched_fragments
         ]
-
-        # Add warnings for potential failure patterns
-        result.warnings = self._get_warnings(current_state)
 
         return result
 
@@ -254,6 +587,87 @@ class MemoryRetriever:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _check_vector_index(self) -> bool:
+        """Lazily check if vector indexes exist in Neo4j (TTL-cached)."""
+        now = time.monotonic()
+        if self._vector_index_checked and (now - self._vector_index_check_time) < self._vector_index_ttl:
+            return self._has_vector_indexes
+
+        self._vector_index_checked = True
+        self._vector_index_check_time = now
+
+        if not self.store:
+            return False
+
+        try:
+            results = self.store.execute_query(
+                "SHOW INDEXES YIELD name WHERE name = 'fragment_embedding' RETURN name"
+            )
+            self._has_vector_indexes = len(results) > 0
+        except Exception:
+            self._has_vector_indexes = False
+
+        logger.debug("Vector index available: %s", self._has_vector_indexes)
+        return self._has_vector_indexes
+
+    def _build_query_text(self, state: State) -> str:
+        """Build a query string from agent state for BM25 search."""
+        parts = []
+        if state.current_error:
+            parts.append(state.current_error)
+        if state.task_description:
+            parts.append(state.task_description)
+        if state.repo_summary:
+            parts.append(state.repo_summary[:100])
+        return " ".join(parts)
+
+    def _escape_lucene(self, text: str) -> str:
+        """Escape Lucene special characters for BM25 queries."""
+        from agent_memory.utils import escape_lucene
+        return escape_lucene(text)
+
+    def _simple_merge(
+        self, results: List[ScoredResult], top_k: int
+    ) -> List[ScoredResult]:
+        """Simple merge: deduplicate by node_id, keep highest score."""
+        best: Dict[str, ScoredResult] = {}
+        for sr in results:
+            if sr.node_id not in best or sr.score > best[sr.node_id].score:
+                best[sr.node_id] = sr
+        sorted_results = sorted(best.values(), key=lambda x: x.score, reverse=True)
+        return sorted_results[:top_k]
+
+    def _scored_to_enriched(
+        self, scored_results: List[ScoredResult]
+    ) -> List[EnrichedFragment]:
+        """Convert ScoredResults to EnrichedFragments."""
+        enriched = []
+        for sr in scored_results:
+            if sr.node_type != "Fragment":
+                continue
+
+            f_data = sr.node_data.get("f", {})
+            if not f_data:
+                continue
+
+            try:
+                frag = self._dict_to_fragment(f_data)
+            except (KeyError, ValueError) as e:
+                logger.debug("Failed to convert scored result to fragment: %s", e)
+                continue
+
+            enriched.append(EnrichedFragment(
+                fragment=frag,
+                repo=sr.node_data.get("repo", ""),
+                instance_id=sr.node_data.get("instance_id", ""),
+                trajectory_summary=sr.node_data.get("summary", ""),
+                action_summary=self._summarize_actions(
+                    f_data.get("action_sequence", [])
+                ),
+                relevance_score=sr.score,
+            ))
+        return enriched
 
     def _extract_error_type(self, error_message: str) -> Optional[str]:
         """Extract error type from message."""

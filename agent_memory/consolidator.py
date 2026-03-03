@@ -20,7 +20,7 @@ class MemoryConsolidator:
 
     Tasks:
     1. Abstract methodologies from successful fragments
-    2. Merge similar nodes
+    2. Merge similar nodes (with entity resolution)
     3. Update statistics
     4. Cleanup low-quality data
     """
@@ -31,11 +31,13 @@ class MemoryConsolidator:
         embedder: Optional["EmbeddingClient"],
         llm_client: Optional[Any] = None,
         consolidation_interval: int = 16,
+        entity_resolver: Optional[Any] = None,
     ):
         self.store = store
         self.embedder = embedder
         self.llm_client = llm_client
         self.consolidation_interval = consolidation_interval
+        self.entity_resolver = entity_resolver
         self._trajectory_count = 0
 
     def should_consolidate(self, trajectory_count: int) -> bool:
@@ -108,6 +110,17 @@ class MemoryConsolidator:
             if len(group) >= 3:  # Minimum 3 examples
                 methodology = self._create_methodology_from_group(group)
                 if methodology:
+                    # Use entity resolution if available
+                    if self.entity_resolver:
+                        resolved, is_new = self.entity_resolver.resolve_methodology(methodology)
+                        if not is_new:
+                            # Update existing methodology in store
+                            self._update_methodology_in_store(resolved)
+                            # Link new fragments to the existing methodology and expire old edges
+                            self._link_methodology_to_errors(resolved, group)
+                            new_methodologies.append(resolved)
+                            continue
+
                     self.store.create_methodology(methodology)
                     # Create RESOLVED_BY edges from ErrorPatterns to this Methodology
                     self._link_methodology_to_errors(methodology, group)
@@ -248,7 +261,10 @@ class MemoryConsolidator:
         methodology: Methodology,
         fragments: List[Fragment],
     ) -> None:
-        """Create RESOLVED_BY edges from ErrorPatterns to Methodology."""
+        """Create RESOLVED_BY edges from ErrorPatterns to Methodology with temporal properties.
+
+        Also expires contradicting old RESOLVED_BY edges for the same error types.
+        """
         if not self.store:
             return
 
@@ -257,12 +273,35 @@ class MemoryConsolidator:
         MATCH (f:Fragment)-[:CAUSED_ERROR]->(e:ErrorPattern)
         WHERE f.id IN $fragment_ids
         MATCH (m:Methodology {id: $methodology_id})
-        MERGE (e)-[:RESOLVED_BY]->(m)
+        MERGE (e)-[r:RESOLVED_BY]->(m)
+        ON CREATE SET r.t_created = datetime(), r.t_valid = datetime()
+        RETURN DISTINCT e.error_type AS error_type
         """
-        self.store.execute_write(query, {
-            "fragment_ids": [f.id for f in fragments],
-            "methodology_id": methodology.id,
-        })
+        try:
+            results = self.store.execute_query(query, {
+                "fragment_ids": [f.id for f in fragments],
+                "methodology_id": methodology.id,
+            })
+            # Expire old contradicting RESOLVED_BY edges
+            for r in results:
+                error_type = r.get("error_type")
+                if error_type:
+                    self.store.expire_contradictions(error_type, methodology.id)
+        except Exception as e:
+            logger.warning("Failed to link methodology to errors: %s", e)
+
+    def _update_methodology_in_store(self, methodology: "Methodology") -> None:
+        """Update an existing methodology's counts in the store."""
+        if not self.store:
+            return
+        query = """
+        MATCH (m:Methodology {id: $id})
+        SET m.success_count = $success_count,
+            m.failure_count = $failure_count,
+            m.confidence = $confidence,
+            m.source_fragment_ids = $source_fragment_ids
+        """
+        self.store.execute_write(query, methodology.to_dict())
 
     def _merge_similar_nodes(self, similarity_threshold: float = 0.9) -> int:
         """Merge nodes that are very similar to reduce redundancy."""

@@ -38,11 +38,46 @@ class QueryMemoryOutput:
     warnings: List[str] = field(default_factory=list)
 
     def to_json(self) -> str:
-        """Serialize to JSON string."""
+        """Serialize to JSON string (backward compat)."""
         return json.dumps({
             "similar_experiences": [asdict(f) for f in self.similar_experiences],
             "warnings": self.warnings,
         }, indent=2)
+
+    def to_structured(self) -> str:
+        """Serialize to structured XML format (Zep-style).
+
+        Token-efficient format that's easier for LLMs to parse.
+        """
+        from agent_memory.formatter import StructuredContextFormatter
+        from agent_memory.retriever import EnrichedFragment
+        from agent_memory.models import Fragment
+
+        # Convert FragmentInfo back to EnrichedFragment for the formatter
+        enriched = []
+        for i, fi in enumerate(self.similar_experiences):
+            frag = Fragment(
+                id=f"output_frag_{i}",
+                step_range=(0, 0),
+                fragment_type="error_recovery",
+                description=fi.resolution,
+                action_sequence=[],
+                outcome=fi.outcome,
+            )
+            enriched.append(EnrichedFragment(
+                fragment=frag,
+                repo=fi.repo,
+                instance_id=fi.instance_id,
+                error_type=fi.error_type,
+                action_summary=fi.resolution,
+                relevance_score=max(0.0, 0.8 - (i * 0.1)),  # Approximate from position, clamped
+            ))
+
+        formatter = StructuredContextFormatter()
+        return formatter.format_enriched(
+            enriched_fragments=enriched,
+            warnings=self.warnings,
+        )
 
 
 class QueryMemoryTool:
