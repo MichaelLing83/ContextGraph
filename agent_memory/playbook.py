@@ -176,10 +176,14 @@ class PlaybookRetriever:
             query_embedding: Pre-computed embedding (optional).
             top_k: Number of entries to return.
             diversity: MMR diversity weight (0=pure relevance, 1=max diversity).
+                Clamped to [0.0, 1.0].
             error_type: Error type for PPR seed nodes (e.g. 'ImportError').
         """
         if not self.store:
             return []
+
+        # Clamp diversity to valid range
+        diversity = max(0.0, min(1.0, diversity))
 
         # Generate embedding if not provided
         if query_embedding is None and self.embedder:
@@ -211,27 +215,48 @@ class PlaybookRetriever:
             [cosine_results, bm25_results, ppr_results], k=60
         )
 
-        # Fetch top candidates with embeddings for MMR
         candidate_ids = [entry_id for entry_id, _ in merged[:top_k * 3]]
         if not candidate_ids:
             return []
 
+        # Only fetch embeddings when MMR will actually run
+        need_embeddings = (
+            query_embedding is not None and diversity > 0
+        )
+
         if use_canonical:
-            candidates = self._fetch_canonical_rules_as_entries(candidate_ids)
+            if need_embeddings:
+                candidates = self._fetch_canonical_rules_as_entries(candidate_ids)
+            else:
+                candidates = self._fetch_canonical_rules_as_entries_plain(
+                    candidate_ids
+                )
         else:
-            candidates = self._fetch_entries_with_embeddings(candidate_ids)
+            if need_embeddings:
+                candidates = self._fetch_entries_with_embeddings(candidate_ids)
+            else:
+                candidates = self._fetch_entries_by_ids(candidate_ids)
         if not candidates:
             return []
 
         # Build RRF score lookup
         rrf_scores = {entry_id: score for entry_id, score in merged}
 
-        # MMR re-ranking for diversity
-        if query_embedding and diversity > 0 and len(candidates) > top_k:
+        # MMR re-ranking for diversity with backfill
+        if need_embeddings and len(candidates) > top_k:
             selected = self._mmr_rerank(
                 candidates, query_embedding, rrf_scores,
                 top_k=top_k, lambda_param=1.0 - diversity,
             )
+            # Backfill with non-embedded candidates if MMR returned < top_k
+            if len(selected) < top_k:
+                selected_ids = {e.id for e in selected}
+                for c in candidates:
+                    if len(selected) >= top_k:
+                        break
+                    if c.id not in selected_ids:
+                        selected.append(c)
+                        selected_ids.add(c.id)
         else:
             selected = candidates[:top_k]
 
@@ -569,7 +594,7 @@ class PlaybookRetriever:
     def _fetch_canonical_rules_as_entries(
         self, ids: List[str]
     ) -> List[PlaybookEntry]:
-        """Fetch CanonicalRule nodes and convert to PlaybookEntry for formatting."""
+        """Fetch CanonicalRule nodes with embeddings, convert to PlaybookEntry."""
         query = """
         UNWIND $ids AS rid
         MATCH (cr:CanonicalRule {id: rid})
@@ -593,6 +618,35 @@ class PlaybookRetriever:
                     section=r.get("section", "OTHERS"),
                     text=r["text"],
                     embedding=r.get("embedding"),
+                ))
+        return entries
+
+    def _fetch_canonical_rules_as_entries_plain(
+        self, ids: List[str]
+    ) -> List[PlaybookEntry]:
+        """Fetch CanonicalRule nodes without embeddings (lighter payload)."""
+        query = """
+        UNWIND $ids AS rid
+        MATCH (cr:CanonicalRule {id: rid})
+        RETURN cr.id AS id, cr.prefix AS prefix, cr.section AS section,
+               cr.rule_text AS text
+        """
+        try:
+            results = self.store.execute_query(query, {"ids": ids})
+        except Exception as e:
+            logger.debug("Fetch canonical rules (plain) failed: %s", e)
+            return []
+
+        lookup = {r["id"]: r for r in results}
+        entries = []
+        for rid in ids:
+            if rid in lookup:
+                r = lookup[rid]
+                entries.append(PlaybookEntry(
+                    id=r["id"],
+                    prefix=r.get("prefix", "misc"),
+                    section=r.get("section", "OTHERS"),
+                    text=r["text"],
                 ))
         return entries
 
@@ -623,12 +677,17 @@ class PlaybookRetriever:
         if q_norm == 0:
             return candidates[:top_k]
 
+        q_dim = len(query_embedding)
+
         # Pre-compute candidate vectors and cosine similarities to query
         cand_vecs = []
         cand_query_sims = []
         valid_candidates = []
         for c in candidates:
             if c.embedding is None:
+                continue
+            # Skip candidates with mismatched embedding dimensions
+            if len(c.embedding) != q_dim:
                 continue
             vec = np.array(c.embedding, dtype=np.float32)
             norm = np.linalg.norm(vec)

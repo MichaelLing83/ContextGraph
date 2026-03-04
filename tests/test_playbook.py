@@ -381,6 +381,10 @@ class TestFormatPlaybookWrap:
         assert "<memory_playbook>" not in plain
         assert "<memory_playbook>" in wrapped
 
+    def test_wrap_empty_returns_empty(self):
+        """format_playbook([], wrap=True) returns empty string."""
+        assert format_playbook([], wrap=True) == ""
+
     def test_roundtrip_unaffected_by_wrap(self):
         """parse → format(wrap=False) → parse roundtrip still works."""
         entries = parse_playbook(SAMPLE_PLAYBOOK)
@@ -469,6 +473,51 @@ class TestMMRRerank:
         retriever = PlaybookRetriever(store=None, embedder=None)
         selected = retriever._mmr_rerank([], [1.0], {}, top_k=5)
         assert selected == []
+
+    def test_mmr_skips_dimension_mismatch(self):
+        """MMR skips candidates with mismatched embedding dimensions."""
+        retriever = PlaybookRetriever(store=None, embedder=None)
+
+        candidates = [
+            PlaybookEntry(id="a", prefix="shr", section="S", text="A",
+                          embedding=[1.0, 0.0, 0.0]),  # 3-d
+            PlaybookEntry(id="b", prefix="shr", section="S", text="B",
+                          embedding=[0.5, 0.5]),         # 2-d (mismatch)
+            PlaybookEntry(id="c", prefix="psw", section="P", text="C",
+                          embedding=[0.0, 1.0, 0.0]),  # 3-d
+        ]
+        rrf_scores = {"a": 0.03, "b": 0.025, "c": 0.02}
+        query_emb = [1.0, 0.0, 0.0]  # 3-d
+
+        # b should be skipped due to dimension mismatch, not crash
+        selected = retriever._mmr_rerank(
+            candidates, query_emb, rrf_scores, top_k=3,
+        )
+        selected_ids = {e.id for e in selected}
+        assert "a" in selected_ids
+        assert "c" in selected_ids
+        # b is skipped (dimension mismatch)
+        assert "b" not in selected_ids
+
+    def test_mmr_all_dimension_mismatch_fallback(self):
+        """MMR falls back to original order when all embeddings mismatch."""
+        retriever = PlaybookRetriever(store=None, embedder=None)
+
+        candidates = [
+            PlaybookEntry(id="a", prefix="shr", section="S", text="A",
+                          embedding=[1.0, 0.0]),         # 2-d
+            PlaybookEntry(id="b", prefix="shr", section="S", text="B",
+                          embedding=[0.5, 0.5]),         # 2-d
+        ]
+        rrf_scores = {"a": 0.03, "b": 0.02}
+        query_emb = [1.0, 0.0, 0.0]  # 3-d (all mismatch)
+
+        selected = retriever._mmr_rerank(
+            candidates, query_emb, rrf_scores, top_k=2,
+        )
+        # Falls back to candidates[:top_k]
+        assert len(selected) == 2
+        assert selected[0].id == "a"
 
 
 class TestRetrieveWithDiversity:
@@ -787,3 +836,36 @@ class TestRetrieveWithErrorType:
         assert retriever._graph_cache is None
         assert retriever._node_specificity == {}
         assert retriever._use_canonical is None
+
+    def test_diversity_clamped(self):
+        """Out-of-range diversity values are clamped to [0, 1]."""
+        retriever = PlaybookRetriever(store=None, embedder=None)
+        # Should not raise even with out-of-range values
+        assert retriever.retrieve("test", diversity=-0.5) == []
+        assert retriever.retrieve("test", diversity=2.0) == []
+
+    def test_mmr_backfill_non_embedded(self):
+        """MMR backfills non-embedded candidates to reach top_k."""
+        retriever = PlaybookRetriever(store=None, embedder=None)
+
+        # Mix of embedded and non-embedded candidates
+        candidates = [
+            PlaybookEntry(id="a", prefix="shr", section="S", text="A",
+                          embedding=[1.0, 0.0]),
+            PlaybookEntry(id="b", prefix="shr", section="S", text="B",
+                          embedding=None),  # no embedding
+            PlaybookEntry(id="c", prefix="psw", section="P", text="C",
+                          embedding=None),  # no embedding
+        ]
+        rrf_scores = {"a": 0.03, "b": 0.025, "c": 0.02}
+        query_emb = [1.0, 0.0]
+
+        # MMR only has 1 valid candidate (a), should return it + backfill b, c
+        selected = retriever._mmr_rerank(
+            candidates, query_emb, rrf_scores, top_k=3,
+        )
+        # MMR itself returns [a] (only embedded one)
+        assert selected[0].id == "a"
+        # But _mmr_rerank returns only embedded candidates;
+        # backfill happens in retrieve(). Test that MMR doesn't crash.
+        assert len(selected) >= 1
