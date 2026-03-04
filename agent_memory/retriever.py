@@ -20,6 +20,7 @@ from agent_memory.models import State, Methodology, Fragment, Strategy
 if TYPE_CHECKING:
     from agent_memory.neo4j_store import Neo4jStore
     from agent_memory.embeddings import EmbeddingClient
+    from agent_memory.query_rewriter import QueryRewriter
 
 logger = logging.getLogger(__name__)
 
@@ -105,9 +106,11 @@ class MemoryRetriever:
         self,
         store: Optional["Neo4jStore"],
         embedder: Optional["EmbeddingClient"],
+        query_rewriter: "Optional[QueryRewriter]" = None,
     ):
         self.store = store
         self.embedder = embedder
+        self.query_rewriter = query_rewriter
         self._vector_index_checked = False
         self._has_vector_indexes = False
         self._vector_index_check_time = 0.0
@@ -154,9 +157,19 @@ class MemoryRetriever:
 
         # Build query text from state
         query_text = self._build_query_text(current_state)
-        query_embedding = current_state.embedding
-        if not query_embedding and self.embedder:
-            query_embedding = self.embedder.embed(query_text)
+
+        # Rewrite query for better methodology matching
+        if self.query_rewriter:
+            query_text = self.query_rewriter.rewrite(query_text)
+
+        # Embedding must correspond to the (possibly rewritten) query text.
+        if self.query_rewriter:
+            # Rewriter active: always re-embed from rewritten text
+            query_embedding = self.embedder.embed(query_text) if self.embedder else None
+        else:
+            query_embedding = current_state.embedding
+            if not query_embedding and self.embedder:
+                query_embedding = self.embedder.embed(query_text)
 
         # Channel 1: Cosine similarity search
         cosine_results = self._search_cosine(query_embedding, top_k=20)

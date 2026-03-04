@@ -45,6 +45,11 @@ docker ps | grep neo4j
 
 # Build context graph from training trajectories (~12 min)
 python scripts/build_context_graph.py
+
+# Clone graph for treatment group (online learning only)
+bash scripts/clone_neo4j_graph.sh          # copy from primary (fast)
+bash scripts/clone_neo4j_graph.sh --rebuild # rebuild from scratch (~12 min)
+bash scripts/clone_neo4j_graph.sh --remove  # remove treatment container
 ```
 
 ## Running Experiments
@@ -101,6 +106,29 @@ git push origin <branch>
 ls, cd, pwd, mkdir, rm, cp, mv
 grep, find, cat, head, tail
 docker ps, docker logs, docker exec
+```
+
+## Rewriter Ablation Experiment
+```bash
+# Pilot: 10 problems, 1 attempt (quick validation)
+nohup .venv/bin/python scripts/run_rewriter_experiment.py \
+  --group both --attempts 1 --n 10 \
+  > results/rewriter_ablation/pilot.log 2>&1 &
+
+# Full experiment: 200 problems, 3 attempts (pass@k / pass^k)
+nohup .venv/bin/python scripts/run_rewriter_experiment.py \
+  --group control --attempts 3 --n 200 \
+  > results/rewriter_ablation/control.log 2>&1 &
+nohup .venv/bin/python scripts/run_rewriter_experiment.py \
+  --group treatment --attempts 3 --n 200 \
+  > results/rewriter_ablation/treatment.log 2>&1 &
+
+# Analyze results (same format as online learning)
+python scripts/analyze_online_learning.py \
+  --results results/rewriter_ablation/results.json
+
+# Dry run (verify setup)
+python scripts/run_rewriter_experiment.py --dry-run --n 2 --attempts 1
 ```
 
 ## Notes
