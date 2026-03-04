@@ -45,6 +45,11 @@ docker ps | grep neo4j
 
 # Build context graph from training trajectories (~12 min)
 python scripts/build_context_graph.py
+
+# Clone graph for treatment group (online learning only)
+bash scripts/clone_neo4j_graph.sh          # copy from primary (fast)
+bash scripts/clone_neo4j_graph.sh --rebuild # rebuild from scratch (~12 min)
+bash scripts/clone_neo4j_graph.sh --remove  # remove treatment container
 ```
 
 ## Running Experiments
