@@ -188,6 +188,9 @@ class AgentMemory:
 
         Returns playbook-format text wrapped in <memory_playbook> tags,
         or empty string if no entries found.
+
+        Extracts error_type from current_error to enable PPR graph traversal
+        (HippoRAG-style multi-hop retrieval from ErrorPattern → CanonicalRule).
         """
         # Build query text from state
         parts = []
@@ -199,10 +202,21 @@ class AgentMemory:
             return ""
 
         query_text = " ".join(parts)
+
+        # Extract error type for PPR seed nodes
+        error_type = None
+        if current_state.current_error:
+            error_type = current_state._extract_error_type(
+                current_state.current_error
+            )
+            if error_type == "Unknown":
+                error_type = None
+
         entries = self.playbook_retriever.retrieve(
             query_text,
             query_embedding=current_state.embedding,
             top_k=top_k,
+            error_type=error_type,
         )
 
         if not entries:

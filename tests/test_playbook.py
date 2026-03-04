@@ -1,15 +1,15 @@
 """Tests for the playbook parsing, retrieval, and formatting module."""
 
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
-from agent_memory.models import PlaybookEntry, PLAYBOOK_SECTIONS
+from agent_memory.models import PlaybookEntry, CanonicalRule, PLAYBOOK_SECTIONS
 from agent_memory.playbook import parse_playbook, format_playbook, PlaybookRetriever
 from agent_memory.strategy_extractor import (
     strategies_to_playbook_entries,
     CATEGORY_TO_PREFIX,
 )
-from agent_memory.models import Strategy
+from agent_memory.models import Strategy, State
 
 
 SAMPLE_PLAYBOOK = """\
@@ -223,17 +223,19 @@ class TestPlaybookRetriever:
         assert entries[1].embedding == [0.9, 0.8]
 
     def test_retrieve_with_mock_store(self):
-        """Full retrieval flow with mock store."""
+        """Full retrieval flow with mock store (fallback to PlaybookEntry)."""
         mock_store = MagicMock()
         mock_embedder = MagicMock()
         mock_embedder.embed.return_value = [0.1, 0.2]
 
-        # Mock cosine search results
+        # Mock query results (first call checks for CanonicalRule existence)
         mock_store.execute_query.side_effect = [
-            # Cosine search
+            # _has_canonical_rules check
+            [{"cnt": 0}],
+            # Cosine search (playbook_embedding)
             [{"id": "shr-00001", "score": 0.95},
              {"id": "cms-00002", "score": 0.80}],
-            # BM25 search
+            # BM25 search (playbook_text)
             [{"id": "shr-00001", "score": 3.5},
              {"id": "psw-00003", "score": 2.1}],
             # Fetch entries with embeddings
@@ -485,6 +487,8 @@ class TestRetrieveWithDiversity:
         mock_embedder.embed.return_value = [0.1, 0.2]
 
         mock_store.execute_query.side_effect = [
+            # _has_canonical_rules check
+            [{"cnt": 0}],
             # Cosine
             [{"id": "a", "score": 0.9}],
             # BM25
@@ -498,3 +502,288 @@ class TestRetrieveWithDiversity:
         results = retriever.retrieve("test", top_k=1, diversity=0)
         assert len(results) == 1
         assert results[0].id == "a"
+
+
+class TestCanonicalRuleModel:
+    """Tests for CanonicalRule dataclass."""
+
+    def test_to_dict_from_dict_roundtrip(self):
+        """to_dict/from_dict roundtrip preserves all fields."""
+        rule = CanonicalRule(
+            id="rule_abc123",
+            rule_text="Always handle import errors by checking sys.path.",
+            category="error_handling",
+            prefix="shr",
+            section="STRATEGIES AND HARD RULES",
+            member_count=5,
+            avg_confidence=0.85,
+            source_repos=["django/django", "flask/flask"],
+            error_types=["ImportError", "ModuleNotFoundError"],
+            embedding=[0.1, 0.2, 0.3],
+        )
+        d = rule.to_dict()
+        restored = CanonicalRule.from_dict(d)
+        assert restored.id == rule.id
+        assert restored.rule_text == rule.rule_text
+        assert restored.category == rule.category
+        assert restored.prefix == rule.prefix
+        assert restored.section == rule.section
+        assert restored.member_count == rule.member_count
+        assert restored.avg_confidence == rule.avg_confidence
+        assert restored.source_repos == rule.source_repos
+        assert restored.error_types == rule.error_types
+        assert restored.embedding == rule.embedding
+
+    def test_from_dict_defaults(self):
+        """from_dict handles missing optional fields."""
+        d = {"id": "rule_x", "rule_text": "Some rule."}
+        rule = CanonicalRule.from_dict(d)
+        assert rule.category == "debugging"
+        assert rule.prefix == "misc"
+        assert rule.section == "OTHERS"
+        assert rule.member_count == 1
+        assert rule.avg_confidence == 0.8
+        assert rule.source_repos == []
+        assert rule.error_types == []
+        assert rule.embedding is None
+
+
+class TestPPRSearch:
+    """Tests for PlaybookRetriever._personalized_pagerank()."""
+
+    def test_ppr_basic_graph(self):
+        """PPR propagates probability from seed to connected nodes."""
+        retriever = PlaybookRetriever(store=None, embedder=None)
+
+        # Simple graph: A -- B -- C
+        adjacency = {
+            "A": ["B"],
+            "B": ["A", "C"],
+            "C": ["B"],
+        }
+        seeds = ["A"]
+
+        scores = retriever._personalized_pagerank(
+            adjacency, seeds, damping=0.5, iterations=20,
+        )
+
+        # Seed node A should have highest score
+        assert scores["A"] > scores["B"]
+        assert scores["B"] > scores["C"]
+        # All scores positive
+        assert all(v > 0 for v in scores.values())
+
+    def test_ppr_two_seeds(self):
+        """PPR with two seeds distributes from both."""
+        retriever = PlaybookRetriever(store=None, embedder=None)
+
+        # Graph: A -- B -- C -- D
+        adjacency = {
+            "A": ["B"],
+            "B": ["A", "C"],
+            "C": ["B", "D"],
+            "D": ["C"],
+        }
+        seeds = ["A", "D"]
+
+        scores = retriever._personalized_pagerank(
+            adjacency, seeds, damping=0.5, iterations=20,
+        )
+
+        # A and D are seeds, B and C are intermediate
+        assert scores["A"] > 0
+        assert scores["D"] > 0
+        # B and C should also have scores
+        assert scores["B"] > 0
+        assert scores["C"] > 0
+
+    def test_ppr_empty_seeds(self):
+        """PPR with no seeds returns empty."""
+        retriever = PlaybookRetriever(store=None, embedder=None)
+        scores = retriever._personalized_pagerank({"A": ["B"], "B": ["A"]}, [], damping=0.5)
+        assert scores == {}
+
+    def test_ppr_empty_graph(self):
+        """PPR with empty graph returns empty."""
+        retriever = PlaybookRetriever(store=None, embedder=None)
+        scores = retriever._personalized_pagerank({}, ["A"], damping=0.5)
+        assert scores == {}
+
+    def test_ppr_seed_not_in_graph(self):
+        """PPR with seed not in graph returns empty."""
+        retriever = PlaybookRetriever(store=None, embedder=None)
+        scores = retriever._personalized_pagerank(
+            {"A": ["B"], "B": ["A"]}, ["Z"], damping=0.5,
+        )
+        assert scores == {}
+
+    def test_ppr_scores_sum_approximately_one(self):
+        """PPR scores should approximately sum to 1.0 (probability distribution)."""
+        retriever = PlaybookRetriever(store=None, embedder=None)
+
+        adjacency = {
+            "A": ["B", "C"],
+            "B": ["A", "C"],
+            "C": ["A", "B"],
+        }
+        scores = retriever._personalized_pagerank(
+            adjacency, ["A"], damping=0.5, iterations=50,
+        )
+        total = sum(scores.values())
+        assert abs(total - 1.0) < 0.01
+
+
+class TestNodeSpecificity:
+    """Tests for node specificity weighting."""
+
+    def test_specificity_inversely_proportional_to_degree(self):
+        """Higher degree → lower specificity."""
+        retriever = PlaybookRetriever(store=None, embedder=None)
+        graph_data = {
+            "node_degrees": {
+                "low_deg": 2,
+                "high_deg": 100,
+            },
+        }
+        specificity = retriever._get_node_specificity(graph_data)
+        assert specificity["low_deg"] > specificity["high_deg"]
+        assert specificity["low_deg"] == 0.5
+        assert specificity["high_deg"] == 0.01
+
+    def test_specificity_minimum_degree_one(self):
+        """Degree 0 or 1 should give specificity of 1.0."""
+        retriever = PlaybookRetriever(store=None, embedder=None)
+        graph_data = {
+            "node_degrees": {"node": 1},
+        }
+        specificity = retriever._get_node_specificity(graph_data)
+        assert specificity["node"] == 1.0
+
+    def test_specificity_caching(self):
+        """Specificity is cached after first computation."""
+        retriever = PlaybookRetriever(store=None, embedder=None)
+        graph_data = {"node_degrees": {"A": 5}}
+        s1 = retriever._get_node_specificity(graph_data)
+        # Modify input — cached result should be unchanged
+        graph_data["node_degrees"]["A"] = 100
+        s2 = retriever._get_node_specificity(graph_data)
+        assert s1["A"] == s2["A"]  # Same cached value
+
+
+class TestThreeChannelRRF:
+    """Tests for _rrf_merge_multi() with three ranked lists."""
+
+    def test_three_channel_merge(self):
+        """RRF merge of three channels promotes items in multiple lists."""
+        retriever = PlaybookRetriever(store=None, embedder=None)
+        cosine = [("a", 0.9), ("b", 0.8)]
+        bm25 = [("b", 3.0), ("c", 2.0)]
+        ppr = [("c", 0.05), ("a", 0.03)]
+
+        merged = retriever._rrf_merge_multi([cosine, bm25, ppr])
+        ids = [entry_id for entry_id, _ in merged]
+
+        # 'a' appears in cosine + ppr, 'b' in cosine + bm25, 'c' in bm25 + ppr
+        # All appear in exactly 2 lists
+        assert len(ids) == 3
+        assert set(ids) == {"a", "b", "c"}
+
+    def test_three_channel_empty_ppr(self):
+        """Empty PPR channel doesn't affect cosine + BM25 merge."""
+        retriever = PlaybookRetriever(store=None, embedder=None)
+        cosine = [("a", 0.9), ("b", 0.8)]
+        bm25 = [("b", 3.0), ("a", 1.0)]
+        ppr = []
+
+        merged = retriever._rrf_merge_multi([cosine, bm25, ppr])
+        ids = [entry_id for entry_id, _ in merged]
+        # Both appear in both lists
+        assert "a" in ids[:2]
+        assert "b" in ids[:2]
+
+    def test_ppr_exclusive_item_included(self):
+        """Items only in PPR channel are still included in merge."""
+        retriever = PlaybookRetriever(store=None, embedder=None)
+        cosine = [("a", 0.9)]
+        bm25 = [("b", 3.0)]
+        ppr = [("c", 0.05)]
+
+        merged = retriever._rrf_merge_multi([cosine, bm25, ppr])
+        ids = [entry_id for entry_id, _ in merged]
+        assert "c" in ids
+
+    def test_backward_compat_rrf_merge(self):
+        """Legacy _rrf_merge delegates to _rrf_merge_multi."""
+        retriever = PlaybookRetriever(store=None, embedder=None)
+        cosine = [("a", 0.9), ("b", 0.8)]
+        bm25 = [("b", 3.0), ("a", 1.0)]
+
+        old = retriever._rrf_merge(cosine, bm25)
+        new = retriever._rrf_merge_multi([cosine, bm25])
+
+        # Should produce identical results
+        assert old == new
+
+
+class TestExtractErrorType:
+    """Tests for State._extract_error_type() used for PPR seeds."""
+
+    def test_standard_python_errors(self):
+        """Extracts common Python error types."""
+        state = State(
+            tools=[], repo_summary="test", task_description="fix bug",
+            current_error="", phase="fixing",
+        )
+        assert state._extract_error_type("ImportError: No module named 'foo'") == "ImportError"
+        assert state._extract_error_type("TypeError: 'NoneType' is not callable") == "TypeError"
+        assert state._extract_error_type("ValueError: invalid literal") == "ValueError"
+
+    def test_exception_types(self):
+        """Extracts exception types (pattern matches *Error and *Exception)."""
+        state = State(
+            tools=[], repo_summary="test", task_description="fix bug",
+            current_error="", phase="fixing",
+        )
+        assert state._extract_error_type("DvcException: cannot reproduce") == "DvcException"
+        assert state._extract_error_type("RuntimeError: maximum recursion depth") == "RuntimeError"
+
+    def test_unknown_error(self):
+        """Returns 'Unknown' for unrecognized formats."""
+        state = State(
+            tools=[], repo_summary="test", task_description="fix bug",
+            current_error="", phase="fixing",
+        )
+        assert state._extract_error_type("something went wrong") == "Unknown"
+        assert state._extract_error_type("") == "Unknown"
+
+    def test_fail_and_error_keywords(self):
+        """Extracts FAIL and ERROR keywords."""
+        state = State(
+            tools=[], repo_summary="test", task_description="fix bug",
+            current_error="", phase="fixing",
+        )
+        assert state._extract_error_type("FAIL: test_something") == "FAIL"
+        assert state._extract_error_type("ERROR in build step") == "ERROR"
+
+
+class TestRetrieveWithErrorType:
+    """Tests for PlaybookRetriever.retrieve() with error_type parameter."""
+
+    def test_error_type_parameter_accepted(self):
+        """Retrieve accepts error_type parameter without error."""
+        retriever = PlaybookRetriever(store=None, embedder=None)
+        result = retriever.retrieve("test query", error_type="ImportError")
+        assert result == []  # no store
+
+    def test_invalidate_cache(self):
+        """invalidate_cache clears all cached state."""
+        retriever = PlaybookRetriever(store=None, embedder=None)
+        retriever._graph_cache = {"adjacency": {}}
+        retriever._node_specificity = {"A": 0.5}
+        retriever._use_canonical = True
+
+        retriever.invalidate_cache()
+
+        assert retriever._graph_cache is None
+        assert retriever._node_specificity == {}
+        assert retriever._use_canonical is None
