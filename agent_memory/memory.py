@@ -89,11 +89,15 @@ class AgentMemory:
         neo4j_uri: Optional[str] = None,
         neo4j_auth: tuple = ("neo4j", "password"),
         embedding_api_key: Optional[str] = None,
+        embedding_base_url: Optional[str] = None,
         consolidate_every: int = 16,
     ):
         # Initialize embedder first (needed for schema dimensions)
         if embedding_api_key:
-            self.embedder = get_embedding_client("openai", api_key=embedding_api_key)
+            kwargs = {"api_key": embedding_api_key}
+            if embedding_base_url:
+                kwargs["base_url"] = embedding_base_url
+            self.embedder = get_embedding_client("openai", **kwargs)
         else:
             self.embedder = get_embedding_client("mock")
             logger.warning("Using mock embedder")
@@ -182,8 +186,8 @@ class AgentMemory:
     def query_playbook(self, current_state: State, top_k: int = 10) -> str:
         """Query playbook entries relevant to the current state.
 
-        Returns playbook-format text grouped by section, or empty string
-        if no entries found.
+        Returns playbook-format text wrapped in <memory_playbook> tags,
+        or empty string if no entries found.
         """
         # Build query text from state
         parts = []
@@ -203,7 +207,7 @@ class AgentMemory:
 
         if not entries:
             return ""
-        return format_playbook(entries)
+        return format_playbook(entries, wrap=True)
 
     def check_loop(self, state_history: List[State]) -> Optional[LoopInfo]:
         """

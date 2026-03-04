@@ -137,8 +137,16 @@ class PlaybookRetriever:
         query_text: str,
         query_embedding: Optional[List[float]] = None,
         top_k: int = 10,
+        diversity: float = 0.3,
     ) -> List[PlaybookEntry]:
-        """Dual-channel search: cosine + BM25, RRF merge, return top_k entries."""
+        """Dual-channel search with MMR diversification.
+
+        Args:
+            query_text: The query string.
+            query_embedding: Pre-computed embedding (optional).
+            top_k: Number of entries to return.
+            diversity: MMR diversity weight (0=pure relevance, 1=max diversity).
+        """
         if not self.store:
             return []
 
@@ -146,8 +154,8 @@ class PlaybookRetriever:
         if query_embedding is None and self.embedder:
             query_embedding = self.embedder.embed(query_text)
 
-        # Fetch candidates from both channels
-        k_per_channel = top_k * 3  # over-fetch for better RRF merge
+        # Over-fetch candidates for RRF merge + MMR re-ranking
+        k_per_channel = top_k * 5
 
         cosine_results = self._search_cosine(query_embedding, k_per_channel) if query_embedding else []
         bm25_results = self._search_bm25(query_text, k_per_channel)
@@ -155,12 +163,28 @@ class PlaybookRetriever:
         # RRF merge
         merged = self._rrf_merge(cosine_results, bm25_results, k=60)
 
-        # Fetch full entries for top_k ids
-        top_ids = [entry_id for entry_id, _ in merged[:top_k]]
-        if not top_ids:
+        # Fetch top candidates with embeddings for MMR
+        candidate_ids = [entry_id for entry_id, _ in merged[:top_k * 3]]
+        if not candidate_ids:
             return []
 
-        return self._fetch_entries_by_ids(top_ids)
+        candidates = self._fetch_entries_with_embeddings(candidate_ids)
+        if not candidates:
+            return []
+
+        # Build RRF score lookup
+        rrf_scores = {entry_id: score for entry_id, score in merged}
+
+        # MMR re-ranking for diversity
+        if query_embedding and diversity > 0 and len(candidates) > top_k:
+            selected = self._mmr_rerank(
+                candidates, query_embedding, rrf_scores,
+                top_k=top_k, lambda_param=1.0 - diversity,
+            )
+        else:
+            selected = candidates[:top_k]
+
+        return selected
 
     def _search_cosine(
         self, embedding: List[float], top_k: int
@@ -250,12 +274,127 @@ class PlaybookRetriever:
                 ))
         return entries
 
+    def _fetch_entries_with_embeddings(
+        self, ids: List[str]
+    ) -> List[PlaybookEntry]:
+        """Fetch PlaybookEntry nodes with embeddings, preserving order."""
+        query = """
+        UNWIND $ids AS eid
+        MATCH (p:PlaybookEntry {id: eid})
+        RETURN p.id AS id, p.prefix AS prefix, p.section AS section,
+               p.text AS text, p.embedding AS embedding
+        """
+        try:
+            results = self.store.execute_query(query, {"ids": ids})
+        except Exception as e:
+            logger.debug("Fetch entries with embeddings failed: %s", e)
+            return []
 
-def format_playbook(entries: List[PlaybookEntry]) -> str:
+        lookup = {r["id"]: r for r in results}
+        entries = []
+        for eid in ids:
+            if eid in lookup:
+                r = lookup[eid]
+                entries.append(PlaybookEntry(
+                    id=r["id"],
+                    prefix=r["prefix"],
+                    section=r["section"],
+                    text=r["text"],
+                    embedding=r.get("embedding"),
+                ))
+        return entries
+
+    def _mmr_rerank(
+        self,
+        candidates: List[PlaybookEntry],
+        query_embedding: List[float],
+        rrf_scores: Dict[str, float],
+        top_k: int = 10,
+        lambda_param: float = 0.7,
+    ) -> List[PlaybookEntry]:
+        """Maximal Marginal Relevance re-ranking for diversity.
+
+        Balances relevance (RRF score) with diversity (low similarity to
+        already-selected entries).
+
+        Args:
+            candidates: Candidate entries with embeddings.
+            query_embedding: Query vector.
+            rrf_scores: Pre-computed RRF relevance scores by entry id.
+            top_k: Number of entries to select.
+            lambda_param: Trade-off (1.0=pure relevance, 0.0=max diversity).
+        """
+        import numpy as np
+
+        q_vec = np.array(query_embedding, dtype=np.float32)
+        q_norm = np.linalg.norm(q_vec)
+        if q_norm == 0:
+            return candidates[:top_k]
+
+        # Pre-compute candidate vectors and cosine similarities to query
+        cand_vecs = []
+        cand_query_sims = []
+        valid_candidates = []
+        for c in candidates:
+            if c.embedding is None:
+                continue
+            vec = np.array(c.embedding, dtype=np.float32)
+            norm = np.linalg.norm(vec)
+            if norm == 0:
+                continue
+            cand_vecs.append(vec / norm)
+            cand_query_sims.append(float(np.dot(q_vec, vec) / (q_norm * norm)))
+            valid_candidates.append(c)
+
+        if not valid_candidates:
+            return candidates[:top_k]
+
+        # Normalize RRF scores to [0, 1] for combining with cosine
+        max_rrf = max((rrf_scores.get(c.id, 0) for c in valid_candidates), default=1)
+        if max_rrf == 0:
+            max_rrf = 1
+
+        selected: List[int] = []
+        remaining = set(range(len(valid_candidates)))
+
+        for _ in range(min(top_k, len(valid_candidates))):
+            best_idx = -1
+            best_score = -float("inf")
+
+            for idx in remaining:
+                # Relevance: combine normalized RRF score and query cosine
+                rrf_norm = rrf_scores.get(valid_candidates[idx].id, 0) / max_rrf
+                relevance = 0.5 * rrf_norm + 0.5 * cand_query_sims[idx]
+
+                # Max similarity to already selected
+                max_sim = 0.0
+                for sel_idx in selected:
+                    sim = float(np.dot(cand_vecs[idx], cand_vecs[sel_idx]))
+                    if sim > max_sim:
+                        max_sim = sim
+
+                score = lambda_param * relevance - (1 - lambda_param) * max_sim
+                if score > best_score:
+                    best_score = score
+                    best_idx = idx
+
+            if best_idx >= 0:
+                selected.append(best_idx)
+                remaining.discard(best_idx)
+
+        return [valid_candidates[i] for i in selected]
+
+
+def format_playbook(entries: List[PlaybookEntry], wrap: bool = False) -> str:
     """Format entries as playbook text grouped by section.
 
     Output follows the canonical section order from PLAYBOOK_SECTIONS.
     Sections with no entries are omitted.
+
+    Args:
+        entries: PlaybookEntry objects to format.
+        wrap: If True, wrap output in <memory_playbook> tags with
+              an instruction header for LLM consumption.
     """
     if not entries:
         return ""
@@ -285,4 +424,14 @@ def format_playbook(entries: List[PlaybookEntry]) -> str:
             parts.append(f"[{entry.id}] {entry.text}")
         parts.append("")
 
-    return "\n".join(parts).rstrip("\n")
+    body = "\n".join(parts).rstrip("\n")
+
+    if wrap:
+        return (
+            "<memory_playbook>\n"
+            "The following rules were learned from solving similar coding "
+            "problems in the past.\nApply relevant rules to your current task.\n\n"
+            f"{body}\n"
+            "</memory_playbook>"
+        )
+    return body

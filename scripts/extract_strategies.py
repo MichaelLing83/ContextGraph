@@ -124,7 +124,7 @@ def main():
     # Initialize strategy indexes (idempotent)
     embedder = None
     if embedding_api_key:
-        embedder = get_embedding_client("openai", api_key=embedding_api_key)
+        embedder = get_embedding_client("openai", api_key=embedding_api_key, base_url=api_base)
         store.init_schema(vector_dimensions=embedder.dimensions)
     else:
         logger.warning("No OPENAI_API_KEY — strategies will not be embedded")
@@ -140,7 +140,7 @@ def main():
     extractor = StrategyExtractor(
         api_base=api_base,
         api_key=api_key or "dry-run-placeholder",
-        model="claude-sonnet-4-20250514",
+        model="minimax-m2.5",
     )
 
     # Fetch all trajectories

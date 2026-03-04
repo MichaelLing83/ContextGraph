@@ -236,24 +236,28 @@ class TestPlaybookRetriever:
             # BM25 search
             [{"id": "shr-00001", "score": 3.5},
              {"id": "psw-00003", "score": 2.1}],
-            # Fetch by ids (shr-00001 appears in both, should be top)
+            # Fetch entries with embeddings
             [{"id": "shr-00001", "prefix": "shr",
               "section": "STRATEGIES AND HARD RULES",
-              "text": "Always check errors."},
+              "text": "Always check errors.",
+              "embedding": [0.9, 0.1]},
              {"id": "cms-00002", "prefix": "cms",
               "section": "COMMON MISTAKES AND CORRECT STRATEGIES",
-              "text": "Don't ignore warnings."},
+              "text": "Don't ignore warnings.",
+              "embedding": [0.1, 0.9]},
              {"id": "psw-00003", "prefix": "psw",
               "section": "PROBLEM-SOLVING HEURISTICS AND WORKFLOWS",
-              "text": "Try step by step."}],
+              "text": "Try step by step.",
+              "embedding": [0.5, 0.5]}],
         ]
 
         retriever = PlaybookRetriever(store=mock_store, embedder=mock_embedder)
         results = retriever.retrieve("import error", top_k=3)
 
         assert len(results) == 3
-        # shr-00001 should be first (appears in both channels)
-        assert results[0].id == "shr-00001"
+        # All three entries should be present
+        result_ids = {r.id for r in results}
+        assert result_ids == {"shr-00001", "cms-00002", "psw-00003"}
 
     def test_rrf_merge(self):
         """RRF merge correctly combines two ranked lists."""
@@ -345,3 +349,152 @@ class TestStrategiesToPlaybookEntries:
         assert CATEGORY_TO_PREFIX["code_navigation"] == "psw"
         assert CATEGORY_TO_PREFIX["dependency"] == "cms"
         assert CATEGORY_TO_PREFIX["configuration"] == "cms"
+
+
+class TestFormatPlaybookWrap:
+    """Tests for format_playbook() with wrap=True."""
+
+    def test_wrap_adds_tags(self):
+        """wrap=True adds <memory_playbook> tags and instruction."""
+        entries = [
+            PlaybookEntry(id="shr-00001", prefix="shr",
+                          section="STRATEGIES AND HARD RULES",
+                          text="Always validate input."),
+        ]
+        output = format_playbook(entries, wrap=True)
+        assert output.startswith("<memory_playbook>")
+        assert output.endswith("</memory_playbook>")
+        assert "Apply relevant rules" in output
+        assert "[shr-00001] Always validate input." in output
+
+    def test_wrap_false_is_default(self):
+        """wrap=False (default) produces plain playbook text."""
+        entries = [
+            PlaybookEntry(id="shr-00001", prefix="shr",
+                          section="STRATEGIES AND HARD RULES",
+                          text="Always validate input."),
+        ]
+        plain = format_playbook(entries)
+        wrapped = format_playbook(entries, wrap=True)
+        assert "<memory_playbook>" not in plain
+        assert "<memory_playbook>" in wrapped
+
+    def test_roundtrip_unaffected_by_wrap(self):
+        """parse → format(wrap=False) → parse roundtrip still works."""
+        entries = parse_playbook(SAMPLE_PLAYBOOK)
+        formatted = format_playbook(entries, wrap=False)
+        re_parsed = parse_playbook(formatted)
+        assert len(re_parsed) == len(entries)
+
+
+class TestMMRRerank:
+    """Tests for PlaybookRetriever._mmr_rerank()."""
+
+    def test_mmr_selects_diverse_entries(self):
+        """MMR should prefer diverse entries over near-duplicates."""
+        retriever = PlaybookRetriever(store=None, embedder=None)
+
+        # Create entries: A and B are near-identical, C is different
+        candidates = [
+            PlaybookEntry(id="a", prefix="shr", section="S",
+                          text="Fix import errors by checking path.",
+                          embedding=[1.0, 0.0, 0.0]),
+            PlaybookEntry(id="b", prefix="shr", section="S",
+                          text="Fix import errors by verifying path.",
+                          embedding=[0.99, 0.1, 0.0]),  # near-duplicate of A
+            PlaybookEntry(id="c", prefix="psw", section="P",
+                          text="Use debugger for runtime errors.",
+                          embedding=[0.0, 1.0, 0.0]),  # very different
+        ]
+        rrf_scores = {"a": 0.03, "b": 0.025, "c": 0.02}
+        query_emb = [0.8, 0.2, 0.0]
+
+        # With diversity, should pick A then C (skip B as near-dup of A)
+        selected = retriever._mmr_rerank(
+            candidates, query_emb, rrf_scores,
+            top_k=2, lambda_param=0.5,
+        )
+        ids = [e.id for e in selected]
+        assert "a" in ids
+        assert "c" in ids  # diverse pick over near-dup "b"
+
+    def test_mmr_pure_relevance(self):
+        """lambda_param=1.0 should behave like pure relevance ranking."""
+        retriever = PlaybookRetriever(store=None, embedder=None)
+
+        candidates = [
+            PlaybookEntry(id="a", prefix="shr", section="S", text="A",
+                          embedding=[1.0, 0.0]),
+            PlaybookEntry(id="b", prefix="shr", section="S", text="B",
+                          embedding=[0.99, 0.1]),
+            PlaybookEntry(id="c", prefix="psw", section="P", text="C",
+                          embedding=[0.0, 1.0]),
+        ]
+        rrf_scores = {"a": 0.03, "b": 0.025, "c": 0.02}
+        query_emb = [1.0, 0.0]
+
+        # Pure relevance: should pick in order of relevance to query
+        selected = retriever._mmr_rerank(
+            candidates, query_emb, rrf_scores,
+            top_k=3, lambda_param=1.0,
+        )
+        # "a" should be first (highest relevance)
+        assert selected[0].id == "a"
+
+    def test_mmr_handles_no_embeddings(self):
+        """MMR falls back to original order when no embeddings."""
+        retriever = PlaybookRetriever(store=None, embedder=None)
+
+        candidates = [
+            PlaybookEntry(id="a", prefix="shr", section="S", text="A",
+                          embedding=None),
+            PlaybookEntry(id="b", prefix="shr", section="S", text="B",
+                          embedding=None),
+        ]
+        rrf_scores = {"a": 0.03, "b": 0.02}
+        query_emb = [1.0, 0.0]
+
+        # Falls back to candidates[:top_k] when no valid embeddings
+        selected = retriever._mmr_rerank(
+            candidates, query_emb, rrf_scores, top_k=2,
+        )
+        assert len(selected) == 2
+        assert selected[0].id == "a"
+        assert selected[1].id == "b"
+
+    def test_mmr_empty_candidates(self):
+        """MMR with empty candidates returns empty."""
+        retriever = PlaybookRetriever(store=None, embedder=None)
+        selected = retriever._mmr_rerank([], [1.0], {}, top_k=5)
+        assert selected == []
+
+
+class TestRetrieveWithDiversity:
+    """Tests for PlaybookRetriever.retrieve() diversity parameter."""
+
+    def test_diversity_parameter_accepted(self):
+        """Retrieve accepts diversity parameter without error."""
+        retriever = PlaybookRetriever(store=None, embedder=None)
+        result = retriever.retrieve("test query", diversity=0.5)
+        assert result == []  # no store
+
+    def test_diversity_zero_skips_mmr(self):
+        """diversity=0 disables MMR re-ranking."""
+        mock_store = MagicMock()
+        mock_embedder = MagicMock()
+        mock_embedder.embed.return_value = [0.1, 0.2]
+
+        mock_store.execute_query.side_effect = [
+            # Cosine
+            [{"id": "a", "score": 0.9}],
+            # BM25
+            [{"id": "a", "score": 3.0}],
+            # Fetch with embeddings
+            [{"id": "a", "prefix": "shr", "section": "S",
+              "text": "Rule A", "embedding": [0.1, 0.2]}],
+        ]
+
+        retriever = PlaybookRetriever(store=mock_store, embedder=mock_embedder)
+        results = retriever.retrieve("test", top_k=1, diversity=0)
+        assert len(results) == 1
+        assert results[0].id == "a"
