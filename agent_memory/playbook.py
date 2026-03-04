@@ -188,9 +188,12 @@ class PlaybookRetriever:
 
         # Apply query rewriting
         if self.query_rewriter:
-            query_text = self.query_rewriter.rewrite(query_text)
-            # Re-embed from rewritten text (ignore pre-computed embedding)
-            if self.embedder:
+            rewritten_query = self.query_rewriter.rewrite(query_text)
+            if rewritten_query != query_text:
+                query_text = rewritten_query
+                if self.embedder:
+                    query_embedding = self.embedder.embed(query_text)
+            elif query_embedding is None and self.embedder:
                 query_embedding = self.embedder.embed(query_text)
         elif query_embedding is None and self.embedder:
             query_embedding = self.embedder.embed(query_text)

@@ -1,7 +1,7 @@
 """Tests for QueryRewriter."""
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from agent_memory.query_rewriter import QueryRewriter
 
@@ -131,6 +131,7 @@ class TestLLMInteraction:
         call_args = mock_client.chat.completions.create.call_args
         user_msg = call_args.kwargs["messages"][1]["content"]
         assert len(user_msg) == 1000
+        assert user_msg == long_query[:1000]
 
 
 class TestRetrieverIntegration:

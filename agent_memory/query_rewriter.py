@@ -8,7 +8,6 @@ embedding channels benefit from the enriched query text.
 import hashlib
 import logging
 from collections import OrderedDict
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +73,9 @@ class QueryRewriter:
         if not self.enabled or not query_text or not query_text.strip():
             return query_text
 
-        key = self._cache_key(query_text)
+        # Truncate input to 1000 chars (used for both cache key and LLM input)
+        truncated = query_text[:1000]
+        key = self._cache_key(truncated)
 
         # Check cache
         if key in self._cache:
@@ -84,8 +85,6 @@ class QueryRewriter:
         # Call LLM
         try:
             client = self._get_client()
-            # Truncate input to 1000 chars
-            truncated = query_text[:1000]
             response = client.chat.completions.create(
                 model=self.model,
                 messages=[
