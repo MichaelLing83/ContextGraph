@@ -109,9 +109,10 @@ class PlaybookRetriever:
     Falls back to PlaybookEntry search if no CanonicalRule nodes exist.
     """
 
-    def __init__(self, store, embedder):
+    def __init__(self, store, embedder, query_rewriter=None):
         self.store = store
         self.embedder = embedder
+        self.query_rewriter = query_rewriter
         self._graph_cache: Optional[Dict] = None
         self._node_specificity: Dict[str, float] = {}
         self._use_canonical: Optional[bool] = None  # lazy detect
@@ -185,8 +186,13 @@ class PlaybookRetriever:
         # Clamp diversity to valid range
         diversity = max(0.0, min(1.0, diversity))
 
-        # Generate embedding if not provided
-        if query_embedding is None and self.embedder:
+        # Apply query rewriting
+        if self.query_rewriter:
+            query_text = self.query_rewriter.rewrite(query_text)
+            # Re-embed from rewritten text (ignore pre-computed embedding)
+            if self.embedder:
+                query_embedding = self.embedder.embed(query_text)
+        elif query_embedding is None and self.embedder:
             query_embedding = self.embedder.embed(query_text)
 
         # Over-fetch candidates for RRF merge + MMR re-ranking

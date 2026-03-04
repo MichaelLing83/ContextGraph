@@ -22,6 +22,7 @@ from agent_memory.formatter import StructuredContextFormatter
 from agent_memory.entity_resolver import EntityResolver
 from agent_memory.community import CommunityDetector
 from agent_memory.playbook import PlaybookRetriever, parse_playbook, format_playbook
+from agent_memory.query_rewriter import QueryRewriter
 from agent_memory.memory import AgentMemory, MemoryContext, MemoryStats
 from agent_memory import evaluation
 
@@ -68,6 +69,8 @@ __all__ = [
     "PlaybookRetriever",
     "parse_playbook",
     "format_playbook",
+    # Query Rewriter
+    "QueryRewriter",
     # Unified API
     "AgentMemory",
     "MemoryContext",

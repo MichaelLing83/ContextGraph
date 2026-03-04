@@ -105,9 +105,11 @@ class MemoryRetriever:
         self,
         store: Optional["Neo4jStore"],
         embedder: Optional["EmbeddingClient"],
+        query_rewriter=None,
     ):
         self.store = store
         self.embedder = embedder
+        self.query_rewriter = query_rewriter
         self._vector_index_checked = False
         self._has_vector_indexes = False
         self._vector_index_check_time = 0.0
@@ -154,6 +156,12 @@ class MemoryRetriever:
 
         # Build query text from state
         query_text = self._build_query_text(current_state)
+
+        # Rewrite query for better methodology matching
+        if self.query_rewriter:
+            query_text = self.query_rewriter.rewrite(query_text)
+
+        # Embedding now uses rewritten text too
         query_embedding = current_state.embedding
         if not query_embedding and self.embedder:
             query_embedding = self.embedder.embed(query_text)

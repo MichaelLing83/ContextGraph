@@ -91,6 +91,10 @@ class AgentMemory:
         embedding_api_key: Optional[str] = None,
         embedding_base_url: Optional[str] = None,
         consolidate_every: int = 16,
+        rewriter_api_base: Optional[str] = None,
+        rewriter_api_key: Optional[str] = None,
+        rewriter_model: str = "claude-sonnet-4-20250514",
+        rewriter_enabled: bool = False,
     ):
         # Initialize embedder first (needed for schema dimensions)
         if embedding_api_key:
@@ -119,18 +123,33 @@ class AgentMemory:
         # Initialize formatter
         self.formatter = StructuredContextFormatter()
 
+        # Initialize query rewriter (optional)
+        self.query_rewriter = None
+        if rewriter_enabled and rewriter_api_key and rewriter_api_base:
+            from agent_memory.query_rewriter import QueryRewriter
+            self.query_rewriter = QueryRewriter(
+                api_base=rewriter_api_base,
+                api_key=rewriter_api_key,
+                model=rewriter_model,
+                enabled=True,
+            )
+
         # Initialize components (with entity resolver)
         self.writer = MemoryWriter(
             self.store, self.embedder, entity_resolver=self.entity_resolver
         )
-        self.retriever = MemoryRetriever(self.store, self.embedder)
+        self.retriever = MemoryRetriever(
+            self.store, self.embedder, query_rewriter=self.query_rewriter
+        )
         self.consolidator = MemoryConsolidator(
             self.store, self.embedder, entity_resolver=self.entity_resolver
         )
         self.loop_detector = LoopDetector()
 
         # Playbook retriever
-        self.playbook_retriever = PlaybookRetriever(self.store, self.embedder)
+        self.playbook_retriever = PlaybookRetriever(
+            self.store, self.embedder, query_rewriter=self.query_rewriter
+        )
 
         # Consolidation tracking
         self._trajectory_count = 0
@@ -212,9 +231,13 @@ class AgentMemory:
             if error_type == "Unknown":
                 error_type = None
 
+        # When rewriter is active, pass None for embedding so
+        # PlaybookRetriever re-embeds from the rewritten text
+        query_embedding = None if self.query_rewriter else current_state.embedding
+
         entries = self.playbook_retriever.retrieve(
             query_text,
-            query_embedding=current_state.embedding,
+            query_embedding=query_embedding,
             top_k=top_k,
             error_type=error_type,
         )
