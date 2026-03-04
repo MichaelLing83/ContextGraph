@@ -102,8 +102,8 @@ class QueryRewriter:
         if not keywords:
             return query_text
 
-        # Prepend keywords to original query
-        rewritten = keywords + " " + query_text
+        # Prepend keywords to original query with clear separator
+        rewritten = keywords + "\n\n" + query_text
 
         # Store in cache with LRU eviction
         self._cache[key] = rewritten

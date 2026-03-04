@@ -89,7 +89,7 @@ class TestLLMInteraction:
         # Keywords prepended, original preserved
         assert result.startswith(keywords)
         assert result.endswith(original)
-        assert keywords + " " + original == result
+        assert keywords + "\n\n" + original == result
 
     def test_llm_failure_returns_original(self, rewriter):
         mock_client = MagicMock()
