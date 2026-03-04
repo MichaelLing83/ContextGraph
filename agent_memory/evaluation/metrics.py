@@ -19,17 +19,26 @@ class ProblemResult:
                 f"got {len(self.attempts)} and {len(self.tokens)}"
             )
 
+    def pass_at(self, k: int) -> bool:
+        """True if ANY of first k attempts succeeded."""
+        return any(self.attempts[:k])
+
+    def pass_hat_at(self, k: int) -> bool:
+        """True if ALL first k attempts succeeded (pass^k)."""
+        first_k = self.attempts[:k]
+        return len(first_k) == k and all(first_k)
+
     @property
     def pass_at_1(self) -> bool:
-        return len(self.attempts) > 0 and self.attempts[0]
+        return self.pass_at(1)
 
     @property
     def pass_at_3(self) -> bool:
-        return any(self.attempts[:3])
+        return self.pass_at(3)
 
     @property
     def pass_at_5(self) -> bool:
-        return any(self.attempts[:5])
+        return self.pass_at(5)
 
     @property
     def first_success_attempt(self) -> Optional[int]:
@@ -55,6 +64,9 @@ class EvaluationMetrics:
     avg_tokens_per_problem: float
     avg_attempts_to_success: Optional[float]
     failure_ratio: float = 0.0  # failed_attempts / total_attempts
+    pass_hat_1: float = 0.0  # Fraction where ALL first 1 attempt succeeded
+    pass_hat_3: float = 0.0  # Fraction where ALL first 3 attempts succeeded
+    pass_hat_5: float = 0.0  # Fraction where ALL first 5 attempts succeeded
 
 
 def calculate_metrics(results: List[ProblemResult]) -> EvaluationMetrics:
@@ -99,6 +111,11 @@ def calculate_metrics(results: List[ProblemResult]) -> EvaluationMetrics:
     )
     failure_ratio = failed_attempts / total_attempts if total_attempts > 0 else 0.0
 
+    # pass^k rates (consistency: ALL first k attempts succeeded)
+    pass_hat_1 = sum(1 for r in results if r.pass_hat_at(1)) / n
+    pass_hat_3 = sum(1 for r in results if r.pass_hat_at(3)) / n
+    pass_hat_5 = sum(1 for r in results if r.pass_hat_at(5)) / n
+
     return EvaluationMetrics(
         pass_at_1=pass_1,
         pass_at_3=pass_3,
@@ -107,4 +124,7 @@ def calculate_metrics(results: List[ProblemResult]) -> EvaluationMetrics:
         avg_tokens_per_problem=avg_tokens,
         avg_attempts_to_success=avg_attempts,
         failure_ratio=failure_ratio,
+        pass_hat_1=pass_hat_1,
+        pass_hat_3=pass_hat_3,
+        pass_hat_5=pass_hat_5,
     )
