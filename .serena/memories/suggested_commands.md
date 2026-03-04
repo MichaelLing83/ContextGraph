@@ -103,6 +103,29 @@ grep, find, cat, head, tail
 docker ps, docker logs, docker exec
 ```
 
+## Rewriter Ablation Experiment
+```bash
+# Pilot: 10 problems, 1 attempt (quick validation)
+nohup .venv/bin/python scripts/run_rewriter_experiment.py \
+  --group both --attempts 1 --n 10 \
+  > results/rewriter_ablation/pilot.log 2>&1 &
+
+# Full experiment: 200 problems, 3 attempts (pass@k / pass^k)
+nohup .venv/bin/python scripts/run_rewriter_experiment.py \
+  --group control --attempts 3 --n 200 \
+  > results/rewriter_ablation/control.log 2>&1 &
+nohup .venv/bin/python scripts/run_rewriter_experiment.py \
+  --group treatment --attempts 3 --n 200 \
+  > results/rewriter_ablation/treatment.log 2>&1 &
+
+# Analyze results (same format as online learning)
+python scripts/analyze_online_learning.py \
+  --results results/rewriter_ablation/results.json
+
+# Dry run (verify setup)
+python scripts/run_rewriter_experiment.py --dry-run --n 2 --attempts 1
+```
+
 ## Notes
 - Always use `uv` instead of `pip` for package management
 - `.env` file must exist with `ANTHROPIC_API_KEY` and `ANTHROPIC_API_BASE`
