@@ -33,6 +33,16 @@ class TestPassAt:
         r = ProblemResult("p1", [], [])
         assert r.pass_at(1) is False
 
+    def test_pass_at_k_zero_raises(self):
+        r = ProblemResult("p1", [True], [100])
+        with pytest.raises(ValueError, match="k must be >= 1"):
+            r.pass_at(0)
+
+    def test_pass_at_k_negative_raises(self):
+        r = ProblemResult("p1", [True], [100])
+        with pytest.raises(ValueError, match="k must be >= 1"):
+            r.pass_at(-1)
+
 
 class TestPassHatAt:
     """Tests for the pass^k (pass_hat_at) consistency metric."""
@@ -72,6 +82,16 @@ class TestPassHatAt:
     def test_single_success(self):
         r = ProblemResult("p1", [True], [100])
         assert r.pass_hat_at(1) is True
+
+    def test_pass_hat_at_k_zero_raises(self):
+        r = ProblemResult("p1", [True], [100])
+        with pytest.raises(ValueError, match="k must be >= 1"):
+            r.pass_hat_at(0)
+
+    def test_pass_hat_at_k_negative_raises(self):
+        r = ProblemResult("p1", [True], [100])
+        with pytest.raises(ValueError, match="k must be >= 1"):
+            r.pass_hat_at(-1)
 
 
 class TestCalculateMetricsPassHat:

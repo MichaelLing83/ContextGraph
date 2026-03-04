@@ -21,10 +21,14 @@ class ProblemResult:
 
     def pass_at(self, k: int) -> bool:
         """True if ANY of first k attempts succeeded."""
+        if k < 1:
+            raise ValueError(f"k must be >= 1, got {k}")
         return any(self.attempts[:k])
 
     def pass_hat_at(self, k: int) -> bool:
         """True if ALL first k attempts succeeded (pass^k)."""
+        if k < 1:
+            raise ValueError(f"k must be >= 1, got {k}")
         first_k = self.attempts[:k]
         return len(first_k) == k and all(first_k)
 

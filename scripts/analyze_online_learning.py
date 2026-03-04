@@ -204,7 +204,7 @@ def print_retry_benefit(data: dict) -> None:
 
 
 def print_mcnemar_test(data: dict) -> None:
-    """McNemar's paired test on per-problem pass@1 outcomes."""
+    """McNemar's paired test on per-problem overall success (any attempt)."""
     if "control" not in data or "treatment" not in data:
         return
 
