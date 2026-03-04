@@ -1,0 +1,72 @@
+# SWE-agent config for TREATMENT group with GLM-4.7 (with memory + rewriter)
+
+agent:
+  type: default
+  model:
+    name: openai/GLM-4.7
+    api_base: https://open.bigmodel.cn/api/coding/paas/v4
+    api_key: ${OPENAI_API_KEY}
+    per_instance_cost_limit: 0
+    max_output_tokens: 8192
+
+  templates:
+    system_template: |-
+      You are a helpful assistant that can interact with a computer to solve tasks.
+      You have access to a memory tool that can query past problem-solving experiences.
+      Use the query_memory tool when you encounter errors or need guidance on debugging strategy.
+    instance_template: |-
+      <uploaded_files>
+      {{working_dir}}
+      </uploaded_files>
+      I've uploaded a python code repository in the directory {{working_dir}}. Consider the following PR description:
+
+      <pr_description>
+      {{problem_statement}}
+      </pr_description>
+
+      Can you help me implement the necessary changes to the repository so that the requirements specified in the <pr_description> are met?
+      I've already taken care of all changes to any of the test files described in the <pr_description>. This means you DON'T have to modify the testing logic or any of the tests in any way!
+      Your task is to make the minimal changes to non-tests files in the {{working_dir}} directory to ensure the <pr_description> is satisfied.
+      Follow these steps to resolve the issue:
+      1. As a first step, it might be a good idea to find and read code relevant to the <pr_description>
+      2. Use the query_memory tool to check for similar past experiences and useful strategies
+      3. Create a script to reproduce the error and execute it with `python <filename.py>` using the bash tool, to confirm the error
+      4. Edit the sourcecode of the repo to resolve the issue
+      5. Rerun your reproduce script and confirm that the error is fixed!
+      6. Think about edgecases and make sure your fix handles them as well
+      Your thinking should be thorough and so it's fine if it's very long.
+    next_step_template: |-
+      OBSERVATION:
+      {{observation}}
+    next_step_no_output_template: |-
+      Your command ran successfully and did not produce any output.
+
+  tools:
+    env_variables:
+      PAGER: cat
+      MANPAGER: cat
+      LESS: -R
+      PIP_PROGRESS_BAR: 'off'
+      TQDM_DISABLE: '1'
+      GIT_PAGER: cat
+      NEO4J_URI: bolt://host.docker.internal:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: contextgraph123
+      REWRITER_ENABLED: 'true'
+      REWRITER_MODEL: GLM-4.7
+    propagate_env_variables:
+      - CONTEXT_GRAPH_ROOT
+      - REWRITER_API_KEY
+      - REWRITER_API_BASE
+    bundles:
+      - path: tools/registry
+      - path: tools/edit_anthropic
+      - path: tools/review_on_submit_m
+      - path: tools/query_memory
+    registry_variables:
+      USE_FILEMAP: 'true'
+    enable_bash_tool: true
+    parse_function:
+      type: function_calling
+
+  history_processors: []
