@@ -61,9 +61,10 @@ class OpenAIEmbeddingClient(EmbeddingClient):
         "text-embedding-ada-002": 1536,
     }
 
-    def __init__(self, api_key: str, model: str = "text-embedding-3-small"):
+    def __init__(self, api_key: str, model: str = "text-embedding-3-small", base_url: Optional[str] = None):
         self.api_key = api_key
         self.model = model
+        self.base_url = base_url
         self._client = None
 
     @property
@@ -74,7 +75,10 @@ class OpenAIEmbeddingClient(EmbeddingClient):
     def client(self):
         if self._client is None:
             from openai import OpenAI
-            self._client = OpenAI(api_key=self.api_key)
+            kwargs = {"api_key": self.api_key}
+            if self.base_url:
+                kwargs["base_url"] = self.base_url
+            self._client = OpenAI(**kwargs)
         return self._client
 
     def embed(self, text: str) -> List[float]:

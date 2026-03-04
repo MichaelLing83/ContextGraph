@@ -89,11 +89,15 @@ class AgentMemory:
         neo4j_uri: Optional[str] = None,
         neo4j_auth: tuple = ("neo4j", "password"),
         embedding_api_key: Optional[str] = None,
+        embedding_base_url: Optional[str] = None,
         consolidate_every: int = 16,
     ):
         # Initialize embedder first (needed for schema dimensions)
         if embedding_api_key:
-            self.embedder = get_embedding_client("openai", api_key=embedding_api_key)
+            kwargs = {"api_key": embedding_api_key}
+            if embedding_base_url:
+                kwargs["base_url"] = embedding_base_url
+            self.embedder = get_embedding_client("openai", **kwargs)
         else:
             self.embedder = get_embedding_client("mock")
             logger.warning("Using mock embedder")
@@ -182,8 +186,11 @@ class AgentMemory:
     def query_playbook(self, current_state: State, top_k: int = 10) -> str:
         """Query playbook entries relevant to the current state.
 
-        Returns playbook-format text grouped by section, or empty string
-        if no entries found.
+        Returns playbook-format text wrapped in <memory_playbook> tags,
+        or empty string if no entries found.
+
+        Extracts error_type from current_error to enable PPR graph traversal
+        (HippoRAG-style multi-hop retrieval from ErrorPattern → CanonicalRule).
         """
         # Build query text from state
         parts = []
@@ -195,15 +202,26 @@ class AgentMemory:
             return ""
 
         query_text = " ".join(parts)
+
+        # Extract error type for PPR seed nodes
+        error_type = None
+        if current_state.current_error:
+            error_type = current_state._extract_error_type(
+                current_state.current_error
+            )
+            if error_type == "Unknown":
+                error_type = None
+
         entries = self.playbook_retriever.retrieve(
             query_text,
             query_embedding=current_state.embedding,
             top_k=top_k,
+            error_type=error_type,
         )
 
         if not entries:
             return ""
-        return format_playbook(entries)
+        return format_playbook(entries, wrap=True)
 
     def check_loop(self, state_history: List[State]) -> Optional[LoopInfo]:
         """

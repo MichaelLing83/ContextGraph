@@ -334,6 +334,56 @@ class Community:
 
 
 @dataclass
+class CanonicalRule:
+    """Deduplicated rule from clustering similar strategies.
+
+    Represents the centroid of a cluster of Strategy nodes.
+    Connected to Strategies via MERGED_INTO and to ErrorPatterns via ADDRESSES_ERROR.
+    Used as the retrieval target for HippoRAG-style PPR search.
+    """
+
+    id: str                    # "rule_{uuid12}"
+    rule_text: str             # Representative rule text (cluster centroid)
+    category: str              # error_handling | debugging | testing | ...
+    prefix: str                # shr, psw, cms, verify
+    section: str               # Playbook section name
+    member_count: int          # How many strategies were merged
+    avg_confidence: float
+    source_repos: List[str] = field(default_factory=list)
+    error_types: List[str] = field(default_factory=list)
+    embedding: Optional[List[float]] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "rule_text": self.rule_text,
+            "category": self.category,
+            "prefix": self.prefix,
+            "section": self.section,
+            "member_count": self.member_count,
+            "avg_confidence": self.avg_confidence,
+            "source_repos": self.source_repos,
+            "error_types": self.error_types,
+            "embedding": self.embedding,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "CanonicalRule":
+        return cls(
+            id=d["id"],
+            rule_text=d["rule_text"],
+            category=d.get("category", "debugging"),
+            prefix=d.get("prefix", "misc"),
+            section=d.get("section", "OTHERS"),
+            member_count=d.get("member_count", 1),
+            avg_confidence=d.get("avg_confidence", 0.8),
+            source_repos=d.get("source_repos", []),
+            error_types=d.get("error_types", []),
+            embedding=d.get("embedding"),
+        )
+
+
+@dataclass
 class ErrorPattern:
     """Known error pattern - for matching and statistics."""
 

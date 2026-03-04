@@ -5,7 +5,7 @@ from neo4j import GraphDatabase, Driver
 import logging
 
 if TYPE_CHECKING:
-    from agent_memory.models import Trajectory, Fragment, Methodology, ErrorPattern, Strategy
+    from agent_memory.models import Trajectory, Fragment, Methodology, ErrorPattern, Strategy, CanonicalRule
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +86,7 @@ class Neo4jStore:
             "CREATE CONSTRAINT community_id IF NOT EXISTS FOR (c:Community) REQUIRE c.id IS UNIQUE",
             "CREATE CONSTRAINT strategy_id IF NOT EXISTS FOR (s:Strategy) REQUIRE s.id IS UNIQUE",
             "CREATE CONSTRAINT playbook_entry_id IF NOT EXISTS FOR (p:PlaybookEntry) REQUIRE p.id IS UNIQUE",
+            "CREATE CONSTRAINT canonical_rule_id IF NOT EXISTS FOR (cr:CanonicalRule) REQUIRE cr.id IS UNIQUE",
 
             # Indexes for common lookups
             "CREATE INDEX trajectory_instance IF NOT EXISTS FOR (t:Trajectory) ON (t.instance_id)",
@@ -97,6 +98,7 @@ class Neo4jStore:
             "CREATE INDEX community_community_id IF NOT EXISTS FOR (c:Community) ON (c.community_id)",
             "CREATE INDEX strategy_category IF NOT EXISTS FOR (s:Strategy) ON (s.category)",
             "CREATE INDEX playbook_prefix IF NOT EXISTS FOR (p:PlaybookEntry) ON (p.prefix)",
+            "CREATE INDEX canonical_rule_category IF NOT EXISTS FOR (cr:CanonicalRule) ON (cr.category)",
 
             # Full-text search indexes (BM25) for keyword matching
             """
@@ -122,6 +124,10 @@ class Neo4jStore:
             """
             CREATE FULLTEXT INDEX playbook_text IF NOT EXISTS
             FOR (p:PlaybookEntry) ON EACH [p.text]
+            """,
+            """
+            CREATE FULLTEXT INDEX canonical_rule_text IF NOT EXISTS
+            FOR (cr:CanonicalRule) ON EACH [cr.rule_text]
             """,
         ]
 
@@ -162,6 +168,14 @@ class Neo4jStore:
             f"""
             CREATE VECTOR INDEX playbook_embedding IF NOT EXISTS
             FOR (p:PlaybookEntry) ON (p.embedding)
+            OPTIONS {{indexConfig: {{
+                `vector.dimensions`: {vector_dimensions},
+                `vector.similarity_function`: 'cosine'
+            }}}}
+            """,
+            f"""
+            CREATE VECTOR INDEX canonical_rule_embedding IF NOT EXISTS
+            FOR (cr:CanonicalRule) ON (cr.embedding)
             OPTIONS {{indexConfig: {{
                 `vector.dimensions`: {vector_dimensions},
                 `vector.similarity_function`: 'cosine'
@@ -336,6 +350,115 @@ class Neo4jStore:
         ON CREATE SET r.t_created = datetime(), r.t_valid = datetime()
         """
         self.execute_write(query, {"fragment_id": fragment_id, "error_type": error_type})
+
+    def create_canonical_rule(self, rule: "CanonicalRule") -> None:
+        """Create or update a CanonicalRule node in Neo4j."""
+        query = """
+        MERGE (cr:CanonicalRule {id: $id})
+        SET cr.rule_text = $rule_text,
+            cr.category = $category,
+            cr.prefix = $prefix,
+            cr.section = $section,
+            cr.member_count = $member_count,
+            cr.avg_confidence = $avg_confidence,
+            cr.source_repos = $source_repos,
+            cr.error_types = $error_types,
+            cr.embedding = $embedding
+        """
+        self.execute_write(query, rule.to_dict())
+
+    def batch_create_canonical_rules(self, rules: list) -> int:
+        """Batch create CanonicalRule nodes. Returns count created."""
+        query = """
+        UNWIND $rules AS r
+        MERGE (cr:CanonicalRule {id: r.id})
+        SET cr.rule_text = r.rule_text,
+            cr.category = r.category,
+            cr.prefix = r.prefix,
+            cr.section = r.section,
+            cr.member_count = r.member_count,
+            cr.avg_confidence = r.avg_confidence,
+            cr.source_repos = r.source_repos,
+            cr.error_types = r.error_types,
+            cr.embedding = r.embedding
+        RETURN count(cr) AS created
+        """
+        params = [rule.to_dict() for rule in rules]
+        results = self.execute_query(query, {"rules": params})
+        return results[0]["created"] if results else 0
+
+    def link_strategy_to_canonical_rule(
+        self, strategy_id: str, rule_id: str
+    ) -> None:
+        """Create MERGED_INTO relation from Strategy to CanonicalRule."""
+        query = """
+        MATCH (s:Strategy {id: $strategy_id})
+        MATCH (cr:CanonicalRule {id: $rule_id})
+        MERGE (s)-[:MERGED_INTO]->(cr)
+        """
+        self.execute_write(query, {
+            "strategy_id": strategy_id,
+            "rule_id": rule_id,
+        })
+
+    def link_canonical_rule_to_error(
+        self, rule_id: str, error_type: str
+    ) -> None:
+        """Create ADDRESSES_ERROR relation from CanonicalRule to ErrorPattern."""
+        query = """
+        MATCH (cr:CanonicalRule {id: $rule_id})
+        MATCH (e:ErrorPattern {error_type: $error_type})
+        MERGE (cr)-[:ADDRESSES_ERROR]->(e)
+        """
+        self.execute_write(query, {
+            "rule_id": rule_id,
+            "error_type": error_type,
+        })
+
+    def export_graph_for_ppr(self) -> Dict[str, Any]:
+        """Export adjacency list and node metadata for PPR computation.
+
+        Returns dict with:
+            adjacency: dict[node_id] -> list[neighbor_id]
+            node_labels: dict[node_id] -> label (e.g. 'CanonicalRule', 'ErrorPattern')
+            node_degrees: dict[node_id] -> int
+        """
+        query = """
+        MATCH (a)-[r]->(b)
+        WHERE a:Trajectory OR a:Fragment OR a:ErrorPattern OR a:Strategy OR a:CanonicalRule
+          AND (b:Trajectory OR b:Fragment OR b:ErrorPattern OR b:Strategy OR b:CanonicalRule)
+        RETURN a.id AS src, b.id AS dst, labels(a)[0] AS src_label, labels(b)[0] AS dst_label
+        """
+        results = self.execute_query(query)
+
+        adjacency: Dict[str, list] = {}
+        node_labels: Dict[str, str] = {}
+        node_degrees: Dict[str, int] = {}
+
+        for r in results:
+            src, dst = r["src"], r["dst"]
+            if src is None or dst is None:
+                continue
+
+            # Build undirected adjacency
+            adjacency.setdefault(src, []).append(dst)
+            adjacency.setdefault(dst, []).append(src)
+
+            # Track labels
+            if src not in node_labels:
+                node_labels[src] = r["src_label"]
+            if dst not in node_labels:
+                node_labels[dst] = r["dst_label"]
+
+            # Count degrees
+            node_degrees[src] = node_degrees.get(src, 0) + 1
+            node_degrees[dst] = node_degrees.get(dst, 0) + 1
+
+        return {
+            "adjacency": adjacency,
+            "node_labels": node_labels,
+            "node_degrees": node_degrees,
+        }
 
     def expire_contradictions(
         self, error_type: str, new_methodology_id: str
