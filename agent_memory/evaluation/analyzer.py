@@ -27,6 +27,11 @@ class ComparisonReport:
     control: EvaluationMetrics
     treatment: EvaluationMetrics
 
+    # pass^k improvements (consistency metric)
+    pass_hat_1_improvement: float = 0.0
+    pass_hat_3_improvement: float = 0.0
+    pass_hat_5_improvement: float = 0.0
+
     def to_summary(self) -> str:
         """Generate human-readable summary."""
         lines = [
@@ -40,6 +45,11 @@ class ComparisonReport:
             f"  pass@1: {self.control.pass_at_1:.1%} → {self.treatment.pass_at_1:.1%} ({self._fmt_change(self.pass_at_1_improvement)})",
             f"  pass@3: {self.control.pass_at_3:.1%} → {self.treatment.pass_at_3:.1%} ({self._fmt_change(self.pass_at_3_improvement)})",
             f"  pass@5: {self.control.pass_at_5:.1%} → {self.treatment.pass_at_5:.1%} ({self._fmt_change(self.pass_at_5_improvement)})",
+            "",
+            "PASS^K RATES (consistency — all first k attempts succeed):",
+            f"  pass^1: {self.control.pass_hat_1:.1%} → {self.treatment.pass_hat_1:.1%} ({self._fmt_change(self.pass_hat_1_improvement)})",
+            f"  pass^3: {self.control.pass_hat_3:.1%} → {self.treatment.pass_hat_3:.1%} ({self._fmt_change(self.pass_hat_3_improvement)})",
+            f"  pass^5: {self.control.pass_hat_5:.1%} → {self.treatment.pass_hat_5:.1%} ({self._fmt_change(self.pass_hat_5_improvement)})",
             "",
             "TOKEN CONSUMPTION:",
             f"  Control avg: {self.control.avg_tokens_per_problem:.0f} tokens",
@@ -142,6 +152,11 @@ def compare_results(
     # Failure ratio reduction (positive = treatment has fewer failures)
     failure_ratio_reduction = control.failure_ratio - treatment.failure_ratio
 
+    # pass^k improvements (consistency)
+    pass_hat_1_imp = treatment.pass_hat_1 - control.pass_hat_1
+    pass_hat_3_imp = treatment.pass_hat_3 - control.pass_hat_3
+    pass_hat_5_imp = treatment.pass_hat_5 - control.pass_hat_5
+
     return ComparisonReport(
         pass_at_1_improvement=pass_1_imp,
         pass_at_3_improvement=pass_3_imp,
@@ -149,6 +164,9 @@ def compare_results(
         token_reduction=token_reduction,
         efficiency_gain=efficiency_gain,
         failure_ratio_reduction=failure_ratio_reduction,
+        pass_hat_1_improvement=pass_hat_1_imp,
+        pass_hat_3_improvement=pass_hat_3_imp,
+        pass_hat_5_improvement=pass_hat_5_imp,
         control=control,
         treatment=treatment,
     )
