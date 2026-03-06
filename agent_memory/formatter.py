@@ -20,7 +20,7 @@ from xml.sax.saxutils import escape as xml_escape
 import logging
 
 from agent_memory.retriever import EnrichedFragment, RetrievalResult
-from agent_memory.models import Methodology, ErrorPattern, Strategy
+from agent_memory.models import Methodology, ErrorPattern, Strategy, ProblemSummary
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,7 @@ MAX_STRATEGIES = 5
 MAX_EXPERIENCES = 3
 MAX_ERROR_PATTERNS = 2
 MAX_METHODOLOGIES = 1
+MAX_SIMILAR_PROBLEMS = 5
 
 
 class StructuredContextFormatter:
@@ -46,11 +47,13 @@ class StructuredContextFormatter:
         max_experiences: int = MAX_EXPERIENCES,
         max_error_patterns: int = MAX_ERROR_PATTERNS,
         max_methodologies: int = MAX_METHODOLOGIES,
+        max_similar_problems: int = MAX_SIMILAR_PROBLEMS,
     ):
         self.max_strategies = max_strategies
         self.max_experiences = max_experiences
         self.max_error_patterns = max_error_patterns
         self.max_methodologies = max_methodologies
+        self.max_similar_problems = max_similar_problems
 
     def format(
         self,
@@ -68,6 +71,12 @@ class StructuredContextFormatter:
             strategies_xml = self._format_strategies(result.strategies)
             if strategies_xml:
                 parts.append(strategies_xml)
+
+        # Similar problems (LLM-generated trajectory summaries)
+        if result.problem_summaries:
+            problems_xml = self._format_similar_problems(result.problem_summaries)
+            if problems_xml:
+                parts.append(problems_xml)
 
         # Past experiences from enriched fragments
         experiences = self._format_experiences(result.enriched_fragments)
@@ -127,6 +136,24 @@ class StructuredContextFormatter:
             lines.append(f"    {xml_escape(s.rule_text)}")
             lines.append("  </strategy>")
         lines.append("</STRATEGIES>")
+        return "\n".join(lines)
+
+    def _format_similar_problems(self, summaries: List[ProblemSummary]) -> str:
+        """Format ProblemSummary nodes as <SIMILAR_PROBLEMS> XML."""
+        if not summaries:
+            return ""
+
+        lines = ["<SIMILAR_PROBLEMS>"]
+        for ps in summaries[:self.max_similar_problems]:
+            outcome = "success" if ps.success else "failure"
+            repo = xml_escape(ps.source_repo) if ps.source_repo else "unknown"
+            lines.append(
+                f'  <problem repo="{repo}" outcome="{outcome}" '
+                f'steps="{ps.total_steps}">'
+            )
+            lines.append(f"    {xml_escape(ps.summary_text)}")
+            lines.append("  </problem>")
+        lines.append("</SIMILAR_PROBLEMS>")
         return "\n".join(lines)
 
     def _format_experiences(self, fragments: List[EnrichedFragment]) -> str:

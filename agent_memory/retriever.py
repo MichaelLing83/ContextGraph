@@ -15,7 +15,7 @@ import re
 import time
 import logging
 
-from agent_memory.models import State, Methodology, Fragment, Strategy
+from agent_memory.models import State, Methodology, Fragment, Strategy, ProblemSummary
 
 if TYPE_CHECKING:
     from agent_memory.neo4j_store import Neo4jStore
@@ -78,6 +78,7 @@ class RetrievalResult:
     enriched_fragments: List[EnrichedFragment] = field(default_factory=list)
     error_solutions: List[Dict[str, Any]] = field(default_factory=list)
     strategies: List[Strategy] = field(default_factory=list)
+    problem_summaries: List["ProblemSummary"] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
 
     def is_empty(self) -> bool:
@@ -86,7 +87,8 @@ class RetrievalResult:
             not self.similar_fragments and
             not self.enriched_fragments and
             not self.error_solutions and
-            not self.strategies
+            not self.strategies and
+            not self.problem_summaries
         )
 
 
@@ -208,6 +210,11 @@ class MemoryRetriever:
 
         # Channel 5: Strategy search (LLM-extracted rules)
         result.strategies = self._search_strategies(
+            query_embedding, query_text, top_k=5
+        )
+
+        # Channel 6: ProblemSummary search (LLM-generated trajectory summaries)
+        result.problem_summaries = self._search_problem_summaries(
             query_embedding, query_text, top_k=5
         )
 
@@ -514,34 +521,16 @@ class MemoryRetriever:
                 except Exception as e:
                     logger.debug("Strategy BM25 search failed: %s", e)
 
-        # RRF merge: combine ranks from both channels
-        rrf_scores: Dict[str, float] = {}
-        strategy_data: Dict[str, dict] = {}
-        rrf_k = 60  # RRF constant
-
-        for rank, (sid, _, data) in enumerate(cosine_ranked):
-            rrf_scores[sid] = rrf_scores.get(sid, 0) + 1.0 / (rrf_k + rank + 1)
-            if sid not in strategy_data:
-                strategy_data[sid] = data
-
-        for rank, (sid, _, data) in enumerate(bm25_ranked):
-            rrf_scores[sid] = rrf_scores.get(sid, 0) + 1.0 / (rrf_k + rank + 1)
-            if sid not in strategy_data:
-                strategy_data[sid] = data
-
-        # Sort by RRF score (retrieval relevance), break ties with confidence
-        sorted_ids = sorted(
-            rrf_scores.keys(),
-            key=lambda sid: (
-                rrf_scores[sid],
-                strategy_data[sid].get("confidence", 0.5),
-            ),
-            reverse=True,
+        # RRF merge (tie-break by confidence for strategies)
+        merged = self._rrf_merge(
+            cosine_ranked, bm25_ranked, top_k=top_k, secondary_key="confidence"
         )
 
         strategies = []
-        for sid in sorted_ids[:top_k]:
-            r = strategy_data[sid]
+        for r in merged:
+            sid = r.get("id", "")
+            if not sid:
+                continue
             strategies.append(Strategy(
                 id=sid,
                 rule_text=r.get("rule_text", ""),
@@ -553,21 +542,155 @@ class MemoryRetriever:
 
         return strategies
 
-    def _check_strategy_index(self) -> bool:
-        """Check if strategy vector index exists in Neo4j."""
+
+    def _check_named_index(self, index_name: str) -> bool:
+        """Check if a named index exists in Neo4j."""
         if not self.store:
             return False
         try:
             results = self.store.execute_query(
-                "SHOW INDEXES YIELD name WHERE name = 'strategy_embedding' RETURN name"
+                "SHOW INDEXES YIELD name WHERE name = $name RETURN name",
+                {"name": index_name},
             )
             return len(results) > 0
         except Exception:
             return False
 
+    def _check_strategy_index(self) -> bool:
+        """Check if strategy vector index exists in Neo4j."""
+        return self._check_named_index("strategy_embedding")
+
+    def _check_problem_summary_index(self) -> bool:
+        """Check if problem_summary vector index exists in Neo4j."""
+        return self._check_named_index("problem_summary_embedding")
+
+    def _search_problem_summaries(
+        self,
+        query_embedding: Optional[List[float]],
+        query_text: str,
+        top_k: int = 5,
+    ) -> List[ProblemSummary]:
+        """Search ProblemSummary nodes by vector similarity + BM25.
+
+        Uses RRF (reciprocal rank fusion) to combine cosine and BM25
+        rankings, similar to strategy search.
+        """
+        if not self.store:
+            return []
+
+        cosine_ranked: List[tuple] = []
+        bm25_ranked: List[tuple] = []
+
+        # Cosine on problem_summary_embedding
+        if query_embedding and self._check_problem_summary_index():
+            try:
+                cosine_query = """
+                CALL db.index.vector.queryNodes('problem_summary_embedding', $k, $embedding)
+                YIELD node, score
+                RETURN node.id AS id, node.summary_text AS summary_text,
+                       node.source_trajectory_id AS source_trajectory_id,
+                       node.source_repo AS source_repo,
+                       node.success AS success,
+                       node.total_steps AS total_steps,
+                       score
+                LIMIT $k
+                """
+                results = self.store.execute_query(cosine_query, {
+                    "k": top_k * 2,
+                    "embedding": query_embedding,
+                })
+                for r in results:
+                    sid = r.get("id", "")
+                    if sid:
+                        cosine_ranked.append((sid, r.get("score", 0), r))
+            except Exception as e:
+                logger.debug("ProblemSummary cosine search failed: %s", e)
+
+        # BM25 on problem_summary_text
+        if query_text:
+            safe_query = self._escape_lucene(query_text)
+            if safe_query.strip():
+                try:
+                    bm25_query = """
+                    CALL db.index.fulltext.queryNodes('problem_summary_text', $query)
+                    YIELD node, score
+                    RETURN node.id AS id, node.summary_text AS summary_text,
+                           node.source_trajectory_id AS source_trajectory_id,
+                           node.source_repo AS source_repo,
+                           node.success AS success,
+                           node.total_steps AS total_steps,
+                           score
+                    LIMIT $k
+                    """
+                    results = self.store.execute_query(bm25_query, {
+                        "query": safe_query,
+                        "k": top_k * 2,
+                    })
+                    for r in results:
+                        sid = r.get("id", "")
+                        if sid:
+                            bm25_ranked.append((sid, r.get("score", 0), r))
+                except Exception as e:
+                    logger.debug("ProblemSummary BM25 search failed: %s", e)
+
+        # RRF merge
+        merged = self._rrf_merge(cosine_ranked, bm25_ranked, top_k=top_k)
+
+        summaries = []
+        for r in merged:
+            sid = r.get("id", "")
+            if not sid:
+                continue
+            summaries.append(ProblemSummary(
+                id=sid,
+                summary_text=r.get("summary_text", ""),
+                source_trajectory_id=r.get("source_trajectory_id", ""),
+                source_repo=r.get("source_repo", ""),
+                success=r.get("success", False),
+                total_steps=r.get("total_steps", 0),
+            ))
+
+        return summaries
+
     # ------------------------------------------------------------------
     # Legacy retrieval (backward compat)
     # ------------------------------------------------------------------
+
+
+    def _rrf_merge(
+        self,
+        cosine_ranked: List[tuple],
+        bm25_ranked: List[tuple],
+        top_k: int,
+        k: int = 60,
+        secondary_key: Optional[str] = None,
+    ) -> List[dict]:
+        """RRF (Reciprocal Rank Fusion) merge of cosine + BM25 ranked results.
+
+        Each item in the ranked lists is (id, score, data_dict).
+        Returns the top_k data dicts ordered by fused score.
+        If secondary_key is provided, ties are broken by that field (descending).
+        """
+        rrf_scores: Dict[str, float] = {}
+        data_by_id: Dict[str, dict] = {}
+
+        for rank, (item_id, _, data) in enumerate(cosine_ranked):
+            rrf_scores[item_id] = rrf_scores.get(item_id, 0.0) + 1.0 / (k + rank + 1)
+            data_by_id.setdefault(item_id, data)
+
+        for rank, (item_id, _, data) in enumerate(bm25_ranked):
+            rrf_scores[item_id] = rrf_scores.get(item_id, 0.0) + 1.0 / (k + rank + 1)
+            data_by_id.setdefault(item_id, data)
+
+        if secondary_key:
+            sorted_ids = sorted(
+                rrf_scores,
+                key=lambda sid: (rrf_scores[sid], data_by_id[sid].get(secondary_key, 0.5)),
+                reverse=True,
+            )
+        else:
+            sorted_ids = sorted(rrf_scores, key=rrf_scores.__getitem__, reverse=True)
+        return [data_by_id[item_id] for item_id in sorted_ids[:top_k]]
 
     def _retrieve_legacy(self, current_state: State, top_k: int) -> RetrievalResult:
         """Legacy keyword-only retrieval (original implementation)."""

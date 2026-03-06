@@ -41,11 +41,22 @@ class StrategyInfo:
 
 
 @dataclass
+class ProblemSummaryInfo:
+    """Problem summary information for tool output."""
+
+    summary: str
+    repo: str
+    success: bool
+    total_steps: int
+
+
+@dataclass
 class QueryMemoryOutput:
     """Output from query_memory tool."""
 
     similar_experiences: List[FragmentInfo] = field(default_factory=list)
     strategies: List[StrategyInfo] = field(default_factory=list)
+    similar_problems: List[ProblemSummaryInfo] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     playbook_text: str = ""
 
@@ -54,6 +65,7 @@ class QueryMemoryOutput:
         return json.dumps({
             "similar_experiences": [asdict(f) for f in self.similar_experiences],
             "strategies": [asdict(s) for s in self.strategies],
+            "similar_problems": [asdict(p) for p in self.similar_problems],
             "warnings": self.warnings,
             "playbook_text": self.playbook_text,
         }, indent=2)
@@ -66,7 +78,7 @@ class QueryMemoryOutput:
         """
         from agent_memory.formatter import StructuredContextFormatter
         from agent_memory.retriever import EnrichedFragment, RetrievalResult
-        from agent_memory.models import Fragment, Strategy
+        from agent_memory.models import Fragment, Strategy, ProblemSummary
 
         # Convert FragmentInfo back to EnrichedFragment for the formatter
         enriched = []
@@ -101,9 +113,23 @@ class QueryMemoryOutput:
             for i, si in enumerate(self.strategies)
         ]
 
+        # Convert ProblemSummaryInfo to ProblemSummary models
+        ps_models = [
+            ProblemSummary(
+                id=f"output_ps_{i}",
+                summary_text=pi.summary,
+                source_trajectory_id="",
+                source_repo=pi.repo,
+                success=pi.success,
+                total_steps=pi.total_steps,
+            )
+            for i, pi in enumerate(self.similar_problems)
+        ]
+
         result = RetrievalResult(
             enriched_fragments=enriched,
             strategies=strategy_models,
+            problem_summaries=ps_models,
             warnings=self.warnings,
         )
         formatter = StructuredContextFormatter()
@@ -224,9 +250,21 @@ class QueryMemoryTool:
             for s in context.strategies[:5]
         ]
 
+        # Convert problem summaries from memory context
+        problem_infos = [
+            ProblemSummaryInfo(
+                summary=ps.summary_text,
+                repo=ps.source_repo,
+                success=ps.success,
+                total_steps=ps.total_steps,
+            )
+            for ps in context.problem_summaries[:5]
+        ]
+
         return QueryMemoryOutput(
             similar_experiences=fragments,
             strategies=strategy_infos,
+            similar_problems=problem_infos,
             warnings=context.warnings,
             playbook_text=playbook_text,
         )

@@ -4,7 +4,7 @@ from typing import Optional, List
 from dataclasses import dataclass, field
 import logging
 
-from agent_memory.models import State, Methodology, Fragment, Strategy
+from agent_memory.models import State, Methodology, Fragment, Strategy, ProblemSummary
 from agent_memory.neo4j_store import Neo4jStore
 from agent_memory.embeddings import get_embedding_client
 from agent_memory.writer import MemoryWriter, RawTrajectory
@@ -26,10 +26,11 @@ class MemoryContext:
     methodologies: List[Methodology] = field(default_factory=list)
     similar_fragments: List[Fragment] = field(default_factory=list)
     strategies: List[Strategy] = field(default_factory=list)
+    problem_summaries: List[ProblemSummary] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
 
     def has_suggestions(self) -> bool:
-        return bool(self.methodologies or self.strategies)
+        return bool(self.methodologies or self.strategies or self.problem_summaries)
 
     def to_structured(self) -> str:
         """Return structured XML representation of this context."""
@@ -44,6 +45,7 @@ class MemoryContext:
             similar_fragments=self.similar_fragments,
             enriched_fragments=enriched,
             strategies=self.strategies,
+            problem_summaries=self.problem_summaries,
             warnings=self.warnings,
         )
         formatter = StructuredContextFormatter()
@@ -90,6 +92,7 @@ class AgentMemory:
         neo4j_auth: tuple = ("neo4j", "password"),
         embedding_api_key: Optional[str] = None,
         embedding_base_url: Optional[str] = None,
+        embedding_model: str = "text-embedding-3-small",
         consolidate_every: int = 16,
         rewriter_api_base: Optional[str] = None,
         rewriter_api_key: Optional[str] = None,
@@ -98,7 +101,7 @@ class AgentMemory:
     ):
         # Initialize embedder first (needed for schema dimensions)
         if embedding_api_key:
-            kwargs = {"api_key": embedding_api_key}
+            kwargs = {"api_key": embedding_api_key, "model": embedding_model}
             if embedding_base_url:
                 kwargs["base_url"] = embedding_base_url
             self.embedder = get_embedding_client("openai", **kwargs)
@@ -164,6 +167,7 @@ class AgentMemory:
         Call this before each agent step to get:
         - Applicable methodologies
         - Similar historical fragments
+        - Similar problem summaries
         - Warnings about potential failure patterns
         """
         # Generate embedding for state if needed
@@ -177,6 +181,7 @@ class AgentMemory:
             methodologies=result.methodologies,
             similar_fragments=result.similar_fragments,
             strategies=result.strategies,
+            problem_summaries=result.problem_summaries,
             warnings=result.warnings,
         )
 
