@@ -36,6 +36,7 @@ Rules:"""
 _VALID_CATEGORIES = {
     "error_handling", "debugging", "testing",
     "code_navigation", "dependency", "configuration",
+    "anti_pattern",
 }
 
 
@@ -183,6 +184,7 @@ CATEGORY_TO_PREFIX = {
     "code_navigation": "psw",
     "dependency": "cms",
     "configuration": "cms",
+    "anti_pattern": "pitfall",
 }
 
 

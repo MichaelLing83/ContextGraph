@@ -1,90 +1,21 @@
-#!/usr/bin/env python3
-"""SWE-agent tool script for querying the context graph memory."""
+#!/bin/bash
+# Wrapper script: always use base conda Python (3.11+) to avoid SyntaxError
+# on old testbed Pythons (<3.7) that can't handle neo4j's annotations.
+# The SWE-bench testbed env may use Python 3.6, but the base conda Python is 3.11+.
+# IMPORTANT: Do NOT use 'exec' — SWE-agent runs this in a pexpect bash session,
+# and exec would replace the shell process, causing EOF when Python exits.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TOOL_ROOT="$(dirname "$SCRIPT_DIR")"
 
-import json
-import os
-import sys
+export PYTHONPATH="$TOOL_ROOT/lib:${PYTHONPATH:-}"
 
+# Try known Python 3.11+ locations (base conda, standalone, system)
+for PYBIN in /opt/miniconda3/bin/python3 /root/python3.11/bin/python3.11; do
+    if [ -x "$PYBIN" ]; then
+        "$PYBIN" "$SCRIPT_DIR/query_memory_impl.py" "$@"
+        exit $?
+    fi
+done
 
-def main():
-    if len(sys.argv) < 4:
-        print("Usage: query_memory <current_error> <task_description> <phase>")
-        sys.exit(1)
-
-    current_error = sys.argv[1]
-    task_description = sys.argv[2]
-    phase = sys.argv[3]
-
-    # Determine tool_lib path
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    tool_root = os.path.dirname(script_dir)
-    tool_lib = os.path.join(tool_root, "lib")
-
-    # Add to sys.path
-    if os.path.isdir(tool_lib) and tool_lib not in sys.path:
-        sys.path.insert(0, tool_lib)
-
-    project_root = os.environ.get("CONTEXT_GRAPH_ROOT", "")
-    if project_root and project_root not in sys.path:
-        sys.path.insert(0, project_root)
-
-    # Try pip install as fallback if neo4j not available
-    try:
-        import neo4j
-    except ImportError:
-        os.system("pip install -q neo4j 2>/dev/null")
-
-    try:
-        from agent_memory import AgentMemory
-        from agent_memory.evaluation.swe_agent_tool import (
-            QueryMemoryTool,
-            QueryMemoryInput,
-        )
-
-        neo4j_uri = os.environ.get("NEO4J_URI", "bolt://host.docker.internal:7687")
-        neo4j_user = os.environ.get("NEO4J_USER", "neo4j")
-        neo4j_password = os.environ.get("NEO4J_PASSWORD", "contextgraph123")
-
-        # Query rewriter configuration
-        rewriter_enabled = os.environ.get("REWRITER_ENABLED", "").lower() in ("1", "true", "yes")
-        rewriter_api_base = os.environ.get("REWRITER_API_BASE", "")
-        rewriter_api_key = os.environ.get("REWRITER_API_KEY", "")
-        rewriter_model = os.environ.get("REWRITER_MODEL", "claude-sonnet-4-20250514")
-
-        memory = AgentMemory(
-            neo4j_uri=neo4j_uri,
-            neo4j_auth=(neo4j_user, neo4j_password),
-            embedding_api_key=None,
-            rewriter_api_base=rewriter_api_base or None,
-            rewriter_api_key=rewriter_api_key or None,
-            rewriter_model=rewriter_model,
-            rewriter_enabled=rewriter_enabled,
-        )
-        try:
-            tool = QueryMemoryTool(memory)
-            input_data = QueryMemoryInput(
-                current_error=current_error,
-                task_description=task_description,
-                phase=phase,
-            )
-            output = tool.invoke(input_data)
-            # Use structured XML output (more token-efficient for LLMs)
-            try:
-                print(output.to_structured())
-            except Exception:
-                # Fallback to JSON if structured formatter unavailable
-                print(output.to_json())
-        finally:
-            memory.close()
-
-    except Exception as e:
-        import traceback
-        error_output = {
-            "similar_experiences": [],
-            "warnings": [f"Memory query failed: {e}"],
-        }
-        print(json.dumps(error_output, indent=2))
-
-
-if __name__ == "__main__":
-    main()
+# Last resort: system python3 (may fail on old testbed envs)
+python3 "$SCRIPT_DIR/query_memory_impl.py" "$@"

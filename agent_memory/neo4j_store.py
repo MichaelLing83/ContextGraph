@@ -5,7 +5,7 @@ from neo4j import GraphDatabase, Driver
 import logging
 
 if TYPE_CHECKING:
-    from agent_memory.models import Trajectory, Fragment, Methodology, ErrorPattern, Strategy, CanonicalRule
+    from agent_memory.models import Trajectory, Fragment, Methodology, ErrorPattern, Strategy, CanonicalRule, ProblemSummary
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,7 @@ class Neo4jStore:
             "CREATE CONSTRAINT strategy_id IF NOT EXISTS FOR (s:Strategy) REQUIRE s.id IS UNIQUE",
             "CREATE CONSTRAINT playbook_entry_id IF NOT EXISTS FOR (p:PlaybookEntry) REQUIRE p.id IS UNIQUE",
             "CREATE CONSTRAINT canonical_rule_id IF NOT EXISTS FOR (cr:CanonicalRule) REQUIRE cr.id IS UNIQUE",
+            "CREATE CONSTRAINT problem_summary_id IF NOT EXISTS FOR (ps:ProblemSummary) REQUIRE ps.id IS UNIQUE",
 
             # Indexes for common lookups
             "CREATE INDEX trajectory_instance IF NOT EXISTS FOR (t:Trajectory) ON (t.instance_id)",
@@ -99,6 +100,8 @@ class Neo4jStore:
             "CREATE INDEX strategy_category IF NOT EXISTS FOR (s:Strategy) ON (s.category)",
             "CREATE INDEX playbook_prefix IF NOT EXISTS FOR (p:PlaybookEntry) ON (p.prefix)",
             "CREATE INDEX canonical_rule_category IF NOT EXISTS FOR (cr:CanonicalRule) ON (cr.category)",
+            "CREATE INDEX problem_summary_success IF NOT EXISTS FOR (ps:ProblemSummary) ON (ps.success)",
+            "CREATE INDEX problem_summary_repo IF NOT EXISTS FOR (ps:ProblemSummary) ON (ps.source_repo)",
 
             # Full-text search indexes (BM25) for keyword matching
             """
@@ -128,6 +131,10 @@ class Neo4jStore:
             """
             CREATE FULLTEXT INDEX canonical_rule_text IF NOT EXISTS
             FOR (cr:CanonicalRule) ON EACH [cr.rule_text]
+            """,
+            """
+            CREATE FULLTEXT INDEX problem_summary_text IF NOT EXISTS
+            FOR (ps:ProblemSummary) ON EACH [ps.summary_text]
             """,
         ]
 
@@ -176,6 +183,14 @@ class Neo4jStore:
             f"""
             CREATE VECTOR INDEX canonical_rule_embedding IF NOT EXISTS
             FOR (cr:CanonicalRule) ON (cr.embedding)
+            OPTIONS {{indexConfig: {{
+                `vector.dimensions`: {vector_dimensions},
+                `vector.similarity_function`: 'cosine'
+            }}}}
+            """,
+            f"""
+            CREATE VECTOR INDEX problem_summary_embedding IF NOT EXISTS
+            FOR (ps:ProblemSummary) ON (ps.embedding)
             OPTIONS {{indexConfig: {{
                 `vector.dimensions`: {vector_dimensions},
                 `vector.similarity_function`: 'cosine'
@@ -485,3 +500,28 @@ class Neo4jStore:
         except Exception as e:
             logger.debug("expire_contradictions failed: %s", e)
             return 0
+
+    def create_problem_summary(self, ps: "ProblemSummary") -> None:
+        """Create or update a ProblemSummary node in Neo4j (idempotent)."""
+        query = """
+        MERGE (ps:ProblemSummary {id: $id})
+        SET ps.summary_text = $summary_text,
+            ps.source_trajectory_id = $source_trajectory_id,
+            ps.source_repo = $source_repo,
+            ps.success = $success,
+            ps.total_steps = $total_steps,
+            ps.embedding = $embedding
+        """
+        self.execute_write(query, ps.to_dict())
+
+    def link_problem_summary_to_trajectory(self, ps_id: str, trajectory_id: str) -> None:
+        """Create SUMMARIZES relation from ProblemSummary to Trajectory."""
+        query = """
+        MATCH (ps:ProblemSummary {id: $ps_id})
+        MATCH (t:Trajectory {id: $trajectory_id})
+        MERGE (ps)-[:SUMMARIZES]->(t)
+        """
+        self.execute_write(query, {
+            "ps_id": ps_id,
+            "trajectory_id": trajectory_id,
+        })

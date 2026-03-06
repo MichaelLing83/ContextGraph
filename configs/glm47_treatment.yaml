@@ -12,8 +12,13 @@ agent:
   templates:
     system_template: |-
       You are a helpful assistant that can interact with a computer to solve tasks.
-      You have access to a memory tool that can query past problem-solving experiences.
-      Use the query_memory tool when you encounter errors or need guidance on debugging strategy.
+
+      IMPORTANT: You have a query_memory tool that retrieves debugging strategies from a knowledge base of past problem-solving experiences. You MUST call query_memory at least twice during each task:
+      1. IMMEDIATELY after reading the problem description — call query_memory with the error type and a brief description to get relevant strategies BEFORE you start coding.
+      2. Whenever you encounter an error or get stuck — call query_memory with the specific error message to find solutions from past experiences.
+
+      The query_memory tool takes three arguments: current_error, task_description, and phase.
+      Always call it early — the strategies it returns will save you time and help you avoid common mistakes.
     instance_template: |-
       <uploaded_files>
       {{working_dir}}
@@ -27,14 +32,18 @@ agent:
       Can you help me implement the necessary changes to the repository so that the requirements specified in the <pr_description> are met?
       I've already taken care of all changes to any of the test files described in the <pr_description>. This means you DON'T have to modify the testing logic or any of the tests in any way!
       Your task is to make the minimal changes to non-tests files in the {{working_dir}} directory to ensure the <pr_description> is satisfied.
-      Follow these steps to resolve the issue:
-      1. As a first step, it might be a good idea to find and read code relevant to the <pr_description>
-      2. Use the query_memory tool to check for similar past experiences and useful strategies
-      3. Create a script to reproduce the error and execute it with `python <filename.py>` using the bash tool, to confirm the error
-      4. Edit the sourcecode of the repo to resolve the issue
-      5. Rerun your reproduce script and confirm that the error is fixed!
-      6. Think about edgecases and make sure your fix handles them as well
-      Your thinking should be thorough and so it's fine if it's very long.
+
+      YOU MUST FOLLOW THESE STEPS IN ORDER:
+      1. Read the problem description carefully and identify the error type or issue category
+      2. **IMMEDIATELY call query_memory** with the error type and task summary to retrieve relevant debugging strategies from past experiences. Do this BEFORE writing any code.
+      3. Find and read code relevant to the <pr_description>
+      4. Create a script to reproduce the error and execute it with `python <filename.py>` using the bash tool, to confirm the error
+      5. If you encounter any errors during debugging, **call query_memory again** with the specific error message
+      6. Edit the sourcecode of the repo to resolve the issue
+      7. Rerun your reproduce script and confirm that the error is fixed!
+      8. Think about edgecases and make sure your fix handles them as well
+
+      Remember: ALWAYS call query_memory first before starting to code. The knowledge base contains valuable strategies that will help you solve the problem more efficiently.
     next_step_template: |-
       OBSERVATION:
       {{observation}}
@@ -54,17 +63,19 @@ agent:
       NEO4J_PASSWORD: contextgraph123
       REWRITER_ENABLED: 'true'
       REWRITER_MODEL: GLM-4.7
+      REWRITER_API_BASE: https://open.bigmodel.cn/api/coding/paas/v4
     propagate_env_variables:
       - CONTEXT_GRAPH_ROOT
+      - OPENAI_API_KEY
       - REWRITER_API_KEY
-      - REWRITER_API_BASE
     bundles:
       - path: tools/registry
       - path: tools/edit_anthropic
       - path: tools/review_on_submit_m
-      - path: tools/query_memory
+      - path: /home/jie/codes/ContextGraph/tools/query_memory
     registry_variables:
       USE_FILEMAP: 'true'
+    execution_timeout: 120
     enable_bash_tool: true
     parse_function:
       type: function_calling

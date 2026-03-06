@@ -232,6 +232,7 @@ class Strategy:
         "code_navigation",
         "dependency",
         "configuration",
+        "anti_pattern",
     ])
 
     def to_dict(self) -> Dict[str, Any]:
@@ -254,6 +255,42 @@ class Strategy:
             source_trajectory_id=d.get("source_trajectory_id", ""),
             source_repo=d.get("source_repo", ""),
             confidence=d.get("confidence", 0.8),
+            embedding=d.get("embedding"),
+        )
+
+
+@dataclass
+class ProblemSummary:
+    """LLM-generated summary of the problem a trajectory encountered."""
+
+    id: str                    # "ps_{uuid12}"
+    summary_text: str          # 2-3 sentence summary of problem, approach, outcome
+    source_trajectory_id: str  # Which trajectory this summarizes
+    source_repo: str           # e.g., "django/django"
+    success: bool              # Whether the trajectory resolved the problem
+    total_steps: int           # Number of steps in the trajectory
+    embedding: Optional[List[float]] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "summary_text": self.summary_text,
+            "source_trajectory_id": self.source_trajectory_id,
+            "source_repo": self.source_repo,
+            "success": self.success,
+            "total_steps": self.total_steps,
+            "embedding": self.embedding,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "ProblemSummary":
+        return cls(
+            id=d["id"],
+            summary_text=d["summary_text"],
+            source_trajectory_id=d.get("source_trajectory_id", ""),
+            source_repo=d.get("source_repo", ""),
+            success=d.get("success", False),
+            total_steps=d.get("total_steps", 0),
             embedding=d.get("embedding"),
         )
 
