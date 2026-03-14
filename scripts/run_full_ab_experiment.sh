@@ -1,8 +1,9 @@
 #!/bin/bash
 # Full A/B experiment: treatment then control, with SWE-bench evaluation + email notification.
-# Usage: nohup bash scripts/run_full_ab_experiment.sh > /tmp/full_ab_experiment.log 2>&1 &
+# Usage: GMAIL_APP_KEY='...' nohup bash scripts/run_full_ab_experiment.sh > /tmp/full_ab_experiment.log 2>&1 &
+# Supports resume: re-run the same command to pick up where it left off.
 
-set -euo pipefail
+set -uo pipefail  # no -e: don't abort on individual instance failures
 
 PROJECT_ROOT="/home/jie/codes/ContextGraph"
 cd "$PROJECT_ROOT"
@@ -136,13 +137,12 @@ echo "PHASE 1: TREATMENT GROUP (200 problems)"
 echo "Started at $(date)"
 echo "============================================================"
 
-# Clean up pilot results
-rm -rf "$TREATMENT_DIR"
+# Resume-friendly: don't delete existing results
 mkdir -p "$TREATMENT_DIR"
 
 python scripts/run_real_swe_experiment.py \
     --group treatment \
-    --max-problems 200
+    --max-problems 200 || true
 
 echo "=== Treatment run complete at $(date) ==="
 collect_stats "$TREATMENT_DIR" "treatment"
@@ -183,12 +183,11 @@ echo "PHASE 2: CONTROL GROUP (200 problems)"
 echo "Started at $(date)"
 echo "============================================================"
 
-rm -rf "$CONTROL_DIR"
 mkdir -p "$CONTROL_DIR"
 
 python scripts/run_real_swe_experiment.py \
     --group control \
-    --max-problems 200
+    --max-problems 200 || true
 
 echo "=== Control run complete at $(date) ==="
 collect_stats "$CONTROL_DIR" "control"
