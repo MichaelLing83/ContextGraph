@@ -154,13 +154,24 @@ Measure whether a context graph built from past experiences improves agent perfo
 - **Volume**: `neo4j-contextgraph-data` (persistent)
 - **Ports**: 7474 (HTTP), 7687 (Bolt)
 - **Auth**: `neo4j` / `contextgraph123`
-- **Start**: `docker run -d --name neo4j-contextgraph -v neo4j-contextgraph-data:/data -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/contextgraph123 neo4j:5`
+- **Start**: `docker compose up -d neo4j` (or see LiteLLM Proxy below)
 
-### API Providers
+### LiteLLM Proxy
+- **Container**: `litellm-proxy` (image: `ghcr.io/berriai/litellm:main-latest`)
+- **Port**: 4000 (OpenAI-compatible API)
+- **Config**: `configs/litellm_config.yaml`
+- **Start**: `docker compose up -d` (starts both Neo4j and LiteLLM)
+- **Routes**:
+  - `claude-*` → Anthropic API (OAuth token from Claude Max subscription)
+  - `text-embedding-*` → ChatAnywhere
+  - `GLM-*` → Zhipu AI
+  - `gpt-*` → OpenAI (reserved for GPT Pro)
+
+### API Providers (via LiteLLM Proxy)
 - **Embeddings**: ChatAnywhere (`https://api.chatanywhere.org`), model `text-embedding-3-large`
-- **LLM (Claude)**: ChatAnywhere proxy, model `claude-sonnet-4-20250514`
+- **LLM (Claude)**: Anthropic API (Claude Max OAuth token), model `claude-sonnet-4-20250514`
 - **LLM (GLM)**: Zhipu AI (`https://open.bigmodel.cn/api/coding/paas/v4`), model `GLM-4.7`
-- **API keys**: In `.env` file (gitignored)
+- **API keys**: In `.env` file (gitignored), see `.env.example` for template
 
 ### Python Environment
 - **Use `uv`** for virtual environment management (user preference)
@@ -208,9 +219,8 @@ Measure whether a context graph built from past experiences improves agent perfo
 ## Running the Full Experiment
 
 ```bash
-# 1. Start Neo4j (with persistent volume)
-docker run -d --name neo4j-contextgraph -v neo4j-contextgraph-data:/data \
-  -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/contextgraph123 neo4j:5
+# 1. Start Neo4j + LiteLLM proxy
+docker compose up -d
 
 # 2. Build context graph (~12 min for 1,795 trajectories)
 python scripts/build_context_graph.py
