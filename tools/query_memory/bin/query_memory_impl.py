@@ -46,14 +46,15 @@ def main():
         neo4j_password = os.environ.get("NEO4J_PASSWORD", "contextgraph123")
 
         # Embedding configuration
-        embedding_api_key = os.environ.get("OPENAI_API_KEY", "")
-        embedding_base_url = os.environ.get("OPENAI_API_BASE", "")
+        # Prefer LITELLM_MASTER_KEY (proxy auth), fall back to OPENAI_API_KEY (direct)
+        embedding_api_key = os.environ.get("LITELLM_MASTER_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
+        embedding_base_url = os.environ.get("OPENAI_API_BASE", "http://localhost:4000/v1")
         embedding_model = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-large")
 
         # Query rewriter configuration
         rewriter_enabled = os.environ.get("REWRITER_ENABLED", "").lower() in ("1", "true", "yes")
-        rewriter_api_base = os.environ.get("REWRITER_API_BASE", "")
-        rewriter_api_key = os.environ.get("REWRITER_API_KEY", "")
+        rewriter_api_base = os.environ.get("REWRITER_API_BASE", "http://localhost:4000/v1")
+        rewriter_api_key = os.environ.get("REWRITER_API_KEY", "") or os.environ.get("LITELLM_MASTER_KEY", "")
         rewriter_model = os.environ.get("REWRITER_MODEL", "claude-sonnet-4-20250514")
 
         memory = AgentMemory(
