@@ -157,7 +157,7 @@ Measure whether a context graph built from past experiences improves agent perfo
 - **Start**: `docker compose up -d neo4j` (or see LiteLLM Proxy below)
 
 ### LiteLLM Proxy
-- **Container**: `litellm-proxy` (image: `ghcr.io/berriai/litellm:main-latest`)
+- **Container**: `litellm-proxy` (image: `ghcr.io/berriai/litellm:main-v1.67.2`)
 - **Port**: 4000 (OpenAI-compatible API)
 - **Config**: `configs/litellm_config.yaml`
 - **Start**: `docker compose up -d` (starts both Neo4j and LiteLLM)
