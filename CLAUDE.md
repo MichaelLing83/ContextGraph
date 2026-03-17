@@ -153,7 +153,7 @@ Measure whether a context graph built from past experiences improves agent perfo
 - **Container**: `neo4j-contextgraph` (image: `neo4j:5`)
 - **Volume**: `neo4j-contextgraph-data` (persistent)
 - **Ports**: 7474 (HTTP), 7687 (Bolt)
-- **Auth**: `neo4j` / `contextgraph123`
+- **Auth**: Set via `NEO4J_AUTH` env var (see `.env`)
 - **Start**: `docker compose up -d neo4j` (or see LiteLLM Proxy below)
 
 ### LiteLLM Proxy

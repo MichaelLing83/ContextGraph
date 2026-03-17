@@ -40,8 +40,12 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Parse only, don't store")
     parser.add_argument("--neo4j-uri", default=os.environ.get("NEO4J_URI", "bolt://localhost:7687"))
     parser.add_argument("--neo4j-user", default=os.environ.get("NEO4J_USER", "neo4j"))
-    parser.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASSWORD", "contextgraph123"))
+    parser.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASSWORD"))
     args = parser.parse_args()
+
+    if not args.neo4j_password:
+        logger.error("NEO4J_PASSWORD environment variable is required (set it in .env)")
+        sys.exit(1)
 
     # Parse
     playbook_path = Path(args.file)

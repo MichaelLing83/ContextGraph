@@ -40,7 +40,10 @@ NODE_TEXT_FIELDS = {
 
 NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.environ.get("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "contextgraph123")
+NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD")
+if not NEO4J_PASSWORD:
+    logger.error("NEO4J_PASSWORD environment variable is required (set it in .env)")
+    sys.exit(1)
 
 
 def get_text_for_node(props: dict, fields: list) -> str:

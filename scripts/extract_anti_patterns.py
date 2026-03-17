@@ -38,7 +38,10 @@ logger = logging.getLogger(__name__)
 
 NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.environ.get("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "contextgraph123")
+NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD")
+if not NEO4J_PASSWORD:
+    logger.error("NEO4J_PASSWORD environment variable is required (set it in .env)")
+    sys.exit(1)
 NEO4J_AUTH = (NEO4J_USER, NEO4J_PASSWORD)
 PROGRESS_PATH = project_root / "results" / "live_experiment" / "anti_pattern_extraction_progress.json"
 STATS_PATH = project_root / "results" / "live_experiment" / "anti_pattern_extraction_stats.json"
