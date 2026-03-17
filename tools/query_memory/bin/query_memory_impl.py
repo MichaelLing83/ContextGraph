@@ -34,11 +34,14 @@ def main():
         import neo4j  # noqa: F401
     except (ImportError, SyntaxError):
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-q", "neo4j"],
+            [sys.executable, "-m", "pip", "install", "-q", "neo4j"],  # noqa: S603
             stderr=subprocess.PIPE,
+            text=True,
         )
         if result.returncode != 0:
             print(f"ERROR: Failed to install neo4j driver (exit {result.returncode})", file=sys.stderr)
+            if result.stderr:
+                print(result.stderr, file=sys.stderr)
             print("RESULT: ERROR - neo4j driver installation failed", flush=True)
             sys.exit(1)
 
