@@ -6,6 +6,7 @@ This script adapts the parsing accordingly.
 """
 
 import json
+import os
 import re
 import sys
 import time
@@ -25,8 +26,16 @@ logger = logging.getLogger(__name__)
 SPLIT_PATH = project_root / "results" / "live_experiment" / "split.json"
 STATS_PATH = project_root / "results" / "live_experiment" / "graph_build_stats.json"
 
-NEO4J_URI = "bolt://localhost:7687"
-NEO4J_AUTH = ("neo4j", "contextgraph123")
+from dotenv import load_dotenv
+load_dotenv(project_root / ".env")
+
+NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
+NEO4J_USER = os.environ.get("NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD")
+if not NEO4J_PASSWORD:
+    logger.error("NEO4J_PASSWORD environment variable is required (set it in .env)")
+    sys.exit(1)
+NEO4J_AUTH = (NEO4J_USER, NEO4J_PASSWORD)
 
 
 def parse_chat_trajectory(path: Path) -> RawTrajectory:

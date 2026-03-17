@@ -3,6 +3,7 @@
 
 import json
 import os
+import subprocess
 import sys
 
 
@@ -32,7 +33,7 @@ def main():
     try:
         import neo4j  # noqa: F401
     except (ImportError, SyntaxError):
-        os.system(f"{sys.executable} -m pip install -q neo4j 2>/dev/null")
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "neo4j"], stderr=subprocess.DEVNULL)
 
     try:
         from agent_memory import AgentMemory
@@ -44,6 +45,8 @@ def main():
         neo4j_uri = os.environ.get("NEO4J_URI", "bolt://host.docker.internal:7687")
         neo4j_user = os.environ.get("NEO4J_USER", "neo4j")
         neo4j_password = os.environ.get("NEO4J_PASSWORD", "contextgraph123")
+        if not os.environ.get("NEO4J_PASSWORD"):
+            print("WARNING: NEO4J_PASSWORD not set, using default. Set it via env var.", file=sys.stderr)
 
         # Embedding configuration
         # Prefer LITELLM_MASTER_KEY (proxy auth), fall back to OPENAI_API_KEY (direct)

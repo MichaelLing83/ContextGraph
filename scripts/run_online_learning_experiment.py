@@ -268,7 +268,9 @@ def run_group(
 
         neo4j_uri = f"bolt://localhost:{treatment_neo4j_port}"
         neo4j_user = os.environ.get("NEO4J_USER", "neo4j")
-        neo4j_pass = os.environ.get("NEO4J_PASSWORD", "contextgraph123")
+        neo4j_pass = os.environ.get("NEO4J_PASSWORD")
+        if not neo4j_pass:
+            raise RuntimeError("NEO4J_PASSWORD environment variable is required (set it in .env)")
         embedding_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
         embedding_base_url = os.environ.get("OPENAI_BASE_URL")
 

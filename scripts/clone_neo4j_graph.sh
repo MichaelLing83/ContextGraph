@@ -15,7 +15,7 @@ PRIMARY_CONTAINER=neo4j-contextgraph
 TREATMENT_CONTAINER=neo4j-contextgraph-treatment
 TREATMENT_HTTP_PORT=7475
 TREATMENT_BOLT_PORT=7688
-NEO4J_AUTH="neo4j/contextgraph123"
+NEO4J_AUTH="${NEO4J_AUTH:?Set NEO4J_AUTH env var}"
 
 # ── Remove mode ──────────────────────────────────────────────────────
 if [ "${1:-}" = "--remove" ]; then
