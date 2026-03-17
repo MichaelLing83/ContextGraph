@@ -348,12 +348,20 @@ def run_swe_agent_batch(
     )
     logger.debug("Command: %s", " ".join(cmd))
 
-    return subprocess.run(
-        cmd,
-        cwd=str(SWE_AGENT_DIR),
-        env=env,
-        timeout=None,  # No timeout for batch — individual instances have cost limits
-    )
+    try:
+        return subprocess.run(
+            cmd,
+            cwd=str(SWE_AGENT_DIR),
+            env=env,
+            timeout=None,  # No timeout for batch — individual instances have cost limits
+        )
+    finally:
+        # Clean up temp config containing secrets
+        if is_treatment and "_tmp" in dir():
+            try:
+                os.unlink(_tmp.name)
+            except OSError:
+                pass
 
 
 def run_swe_agent_single(
