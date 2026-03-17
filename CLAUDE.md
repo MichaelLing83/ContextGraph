@@ -162,14 +162,72 @@ Measure whether a context graph built from past experiences improves agent perfo
 - **Config**: `configs/litellm_config.yaml`
 - **Start**: `docker compose up -d` (starts both Neo4j and LiteLLM)
 - **Routes**:
-  - `claude-*` → Anthropic API (OAuth token from Claude Max subscription)
+  - `claude-*` → Anthropic API
   - `text-embedding-*` → ChatAnywhere
   - `GLM-*` → Zhipu AI
   - `gpt-*` → OpenAI (reserved for GPT Pro)
 
+#### LiteLLM Setup
+
+1. **Copy `.env.example` to `.env`**:
+   ```bash
+   cp .env.example .env
+   ```
+
+2. **Fill in required keys in `.env`**:
+   ```bash
+   # Generate a random master key for the proxy
+   echo "LITELLM_MASTER_KEY=sk-litellm-$(openssl rand -hex 16)" >> .env
+
+   # ChatAnywhere key (for embeddings) — copy from existing OPENAI_API_KEY
+   echo "CHATANYWHERE_API_KEY=<your-chatanywhere-key>" >> .env
+
+   # (Optional) Zhipu AI key for GLM-4.7
+   # echo "ZHIPU_API_KEY=..." >> .env
+   ```
+
+3. **Sync Claude Max OAuth token** (auto-reads from `~/.claude/.credentials.json`):
+   ```bash
+   ./scripts/sync_oauth_token.sh
+   ```
+   This reads the `accessToken` from Claude Code's credentials and writes it as `ANTHROPIC_API_KEY` in `.env`. Re-run when the token expires (~8-12h).
+
+4. **Start the proxy**:
+   ```bash
+   docker compose up -d
+   ```
+
+5. **Verify**:
+   ```bash
+   # Health check
+   curl http://localhost:4000/health
+
+   # Test chat completion
+   curl -s http://localhost:4000/v1/chat/completions \
+     -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"model":"claude-sonnet-4-20250514","messages":[{"role":"user","content":"hi"}],"max_tokens":5}'
+
+   # Test embedding
+   curl -s http://localhost:4000/v1/embeddings \
+     -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"model":"text-embedding-3-large","input":"test"}'
+   ```
+
+6. **Web UI**: `http://localhost:4000/ui` (login with master key)
+
+#### Key Migration from Old Setup
+
+If migrating from the old ChatAnywhere-only setup:
+- Old `OPENAI_API_KEY` → rename to `CHATANYWHERE_API_KEY` in `.env`
+- Old `OPENAI_API_BASE` → no longer needed (proxy handles routing)
+- SWE-agent configs now point to `http://localhost:4000/v1` instead of provider URLs
+- Docker containers use `${LITELLM_PROXY_HOST:-host.docker.internal}:4000` to reach the proxy
+
 ### API Providers (via LiteLLM Proxy)
 - **Embeddings**: ChatAnywhere (`https://api.chatanywhere.org`), model `text-embedding-3-large`
-- **LLM (Claude)**: Anthropic API (Claude Max OAuth token), model `claude-sonnet-4-20250514`
+- **LLM (Claude)**: Anthropic API, model `claude-sonnet-4-20250514`
 - **LLM (GLM)**: Zhipu AI (`https://open.bigmodel.cn/api/coding/paas/v4`), model `GLM-4.7`
 - **API keys**: In `.env` file (gitignored), see `.env.example` for template
 
