@@ -40,7 +40,7 @@ def main():
         if result.returncode != 0:
             print(f"ERROR: Failed to install neo4j driver (exit {result.returncode})", file=sys.stderr)
             print("RESULT: ERROR - neo4j driver installation failed", flush=True)
-            return
+            sys.exit(1)
 
     try:
         from agent_memory import AgentMemory
@@ -55,7 +55,7 @@ def main():
         if not neo4j_password:
             print("ERROR: NEO4J_PASSWORD env var is required but not set.", file=sys.stderr)
             print("RESULT: ERROR - NEO4J_PASSWORD not set", flush=True)
-            return
+            sys.exit(1)
 
         # Embedding configuration
         # Prefer LITELLM_MASTER_KEY (proxy auth), fall back to OPENAI_API_KEY (direct)
