@@ -307,17 +307,25 @@ def run_swe_agent_batch(
             '["--add-host=host.docker.internal:host-gateway"]',
         ]
 
-    # Inject LITELLM_MASTER_KEY as OPENAI_API_KEY into treatment config.
-    # SWE-agent CLI doesn't support dynamic env_variables keys, so we
-    # generate a temp config with the resolved value.
-    master_key = os.environ.get("LITELLM_MASTER_KEY", "")
-    if master_key and "treatment" in str(config_path):
+    # For treatment configs, inject runtime secrets into a temp YAML.
+    # SWE-agent doesn't expand ${} in env_variables and its CLI doesn't
+    # support adding dynamic env_variables keys, so we resolve placeholders
+    # and write a temp config file.
+    is_treatment = config_path.resolve() != CONFIG_MAP["control"].resolve()
+    if is_treatment:
         import yaml as _yaml
         import tempfile as _tempfile
         with open(config_path) as _f:
             _cfg = _yaml.safe_load(_f)
         _env_vars = _cfg.get("agent", {}).get("tools", {}).get("env_variables", {})
-        _env_vars["OPENAI_API_KEY"] = master_key
+        # Inject secrets from host environment
+        _secret_map = {
+            "OPENAI_API_KEY": os.environ.get("LITELLM_MASTER_KEY", ""),
+            "NEO4J_PASSWORD": os.environ.get("NEO4J_PASSWORD", ""),
+        }
+        for _key, _val in _secret_map.items():
+            if _val:
+                _env_vars[_key] = _val
         _tmp = _tempfile.NamedTemporaryFile(
             mode="w", suffix=".yaml", prefix="swe_agent_", delete=False,
         )
@@ -327,7 +335,7 @@ def run_swe_agent_batch(
         for _i, _arg in enumerate(cmd):
             if str(config_path) in _arg:
                 cmd[_i] = _arg.replace(str(config_path), _tmp.name)
-        logger.info("Injected OPENAI_API_KEY into temp config: %s", _tmp.name)
+        logger.info("Injected runtime secrets into temp config: %s", _tmp.name)
 
     env = {
         **os.environ,
@@ -386,17 +394,25 @@ def run_swe_agent_single(
             '["--add-host=host.docker.internal:host-gateway"]',
         ]
 
-    # Inject LITELLM_MASTER_KEY as OPENAI_API_KEY into treatment config.
-    # SWE-agent CLI doesn't support dynamic env_variables keys, so we
-    # generate a temp config with the resolved value.
-    master_key = os.environ.get("LITELLM_MASTER_KEY", "")
-    if master_key and "treatment" in str(config_path):
+    # For treatment configs, inject runtime secrets into a temp YAML.
+    # SWE-agent doesn't expand ${} in env_variables and its CLI doesn't
+    # support adding dynamic env_variables keys, so we resolve placeholders
+    # and write a temp config file.
+    is_treatment = config_path.resolve() != CONFIG_MAP["control"].resolve()
+    if is_treatment:
         import yaml as _yaml
         import tempfile as _tempfile
         with open(config_path) as _f:
             _cfg = _yaml.safe_load(_f)
         _env_vars = _cfg.get("agent", {}).get("tools", {}).get("env_variables", {})
-        _env_vars["OPENAI_API_KEY"] = master_key
+        # Inject secrets from host environment
+        _secret_map = {
+            "OPENAI_API_KEY": os.environ.get("LITELLM_MASTER_KEY", ""),
+            "NEO4J_PASSWORD": os.environ.get("NEO4J_PASSWORD", ""),
+        }
+        for _key, _val in _secret_map.items():
+            if _val:
+                _env_vars[_key] = _val
         _tmp = _tempfile.NamedTemporaryFile(
             mode="w", suffix=".yaml", prefix="swe_agent_", delete=False,
         )
@@ -406,7 +422,7 @@ def run_swe_agent_single(
         for _i, _arg in enumerate(cmd):
             if str(config_path) in _arg:
                 cmd[_i] = _arg.replace(str(config_path), _tmp.name)
-        logger.info("Injected OPENAI_API_KEY into temp config: %s", _tmp.name)
+        logger.info("Injected runtime secrets into temp config: %s", _tmp.name)
 
     env = {
         **os.environ,
