@@ -304,7 +304,7 @@ def run_swe_agent_batch(
     if sys.platform == "linux":
         cmd += [
             "--instances.deployment.docker_args",
-            '["--add-host=host.docker.internal:host-gateway"]',
+            '["--add-host=host.docker.internal:host-gateway", "--network=contextgraph_default"]',
         ]
 
     # For treatment configs, inject runtime secrets into a temp YAML.
@@ -399,7 +399,7 @@ def run_swe_agent_single(
     if sys.platform == "linux":
         cmd += [
             "--instances.deployment.docker_args",
-            '["--add-host=host.docker.internal:host-gateway"]',
+            '["--add-host=host.docker.internal:host-gateway", "--network=contextgraph_default"]',
         ]
 
     # For treatment configs, inject runtime secrets into a temp YAML.
