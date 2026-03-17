@@ -157,12 +157,12 @@ Measure whether a context graph built from past experiences improves agent perfo
 - **Start**: `docker compose up -d neo4j` (or see LiteLLM Proxy below)
 
 ### LiteLLM Proxy
-- **Container**: `litellm-proxy` (image: `ghcr.io/berriai/litellm:main-v1.67.2`)
+- **Container**: `litellm-proxy` (image: `ghcr.io/berriai/litellm:main-v1.82.3`)
 - **Port**: 4000 (OpenAI-compatible API)
 - **Config**: `configs/litellm_config.yaml`
 - **Start**: `docker compose up -d` (starts both Neo4j and LiteLLM)
 - **Routes**:
-  - `claude-*` → Anthropic API
+  - `claude-*` → ChatAnywhere (OpenAI-compatible)
   - `text-embedding-*` → ChatAnywhere
   - `GLM-*` → Zhipu AI
   - `gpt-*` → OpenAI (reserved for GPT Pro)
@@ -227,7 +227,7 @@ If migrating from the old ChatAnywhere-only setup:
 
 ### API Providers (via LiteLLM Proxy)
 - **Embeddings**: ChatAnywhere (`https://api.chatanywhere.org`), model `text-embedding-3-large`
-- **LLM (Claude)**: Anthropic API, model `claude-sonnet-4-20250514`
+- **LLM (Claude)**: ChatAnywhere (`https://api.chatanywhere.org`), model `claude-sonnet-4-20250514`
 - **LLM (GLM)**: Zhipu AI (`https://open.bigmodel.cn/api/coding/paas/v4`), model `GLM-4.7`
 - **API keys**: In `.env` file (gitignored), see `.env.example` for template
 
