@@ -41,19 +41,17 @@ def _get_tool() -> QueryMemoryTool:
         neo4j_uri = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
         neo4j_user = os.environ.get("NEO4J_USER", "neo4j")
         neo4j_password = os.environ.get("NEO4J_PASSWORD", "")
-        if not neo4j_password:
-            raise RuntimeError("NEO4J_PASSWORD environment variable is required")
-
         embedding_api_key = os.environ.get("OPENAI_API_KEY", "")
-        if not embedding_api_key:
-            raise RuntimeError("OPENAI_API_KEY environment variable is required for embeddings")
         embedding_base_url = os.environ.get("OPENAI_API_BASE") or None
         embedding_model = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-large")
+
+        # Env validation (mirrors _check_env but guards lazy init too)
+        _check_required_env(neo4j_password, embedding_api_key)
 
         _memory = AgentMemory(
             neo4j_uri=neo4j_uri,
             neo4j_auth=(neo4j_user, neo4j_password),
-            embedding_api_key=embedding_api_key or None,
+            embedding_api_key=embedding_api_key,
             embedding_base_url=embedding_base_url,
             embedding_model=embedding_model,
         )
@@ -101,18 +99,21 @@ def query_memory(
         return output.to_json()
 
 
-def _check_env():
-    """Validate required environment variables at startup."""
+def _check_required_env(neo4j_password: str = "", embedding_api_key: str = "") -> None:
+    """Validate required config. Called at startup and inside _get_tool."""
     missing = []
-    if not os.environ.get("NEO4J_PASSWORD"):
+    neo4j_password = neo4j_password or os.environ.get("NEO4J_PASSWORD", "")
+    embedding_api_key = embedding_api_key or os.environ.get("OPENAI_API_KEY", "")
+    if not neo4j_password:
         missing.append("NEO4J_PASSWORD")
-    if not os.environ.get("OPENAI_API_KEY"):
+    if not embedding_api_key:
         missing.append("OPENAI_API_KEY")
     if missing:
-        logger.error("Missing required environment variables: %s", ", ".join(missing))
-        raise SystemExit(1)
+        msg = f"Missing required environment variables: {', '.join(missing)}"
+        logger.error(msg)
+        raise RuntimeError(msg)
 
 
 if __name__ == "__main__":
-    _check_env()
+    _check_required_env()
     mcp.run()
