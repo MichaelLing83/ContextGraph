@@ -82,7 +82,9 @@ def query_memory(
         phase: Current phase of problem solving.
             One of: exploring, understanding, locating, fixing, verifying, testing.
     """
+    phase = phase.lower()
     if phase not in _VALID_PHASES:
+        logger.warning("Invalid phase %r, defaulting to 'fixing'", phase)
         phase = "fixing"
     tool = _get_tool()
     input_data = QueryMemoryInput(
@@ -95,8 +97,22 @@ def query_memory(
     try:
         return output.to_structured()
     except Exception:
+        logger.warning("to_structured() failed, falling back to JSON", exc_info=True)
         return output.to_json()
 
 
+def _check_env():
+    """Validate required environment variables at startup."""
+    missing = []
+    if not os.environ.get("NEO4J_PASSWORD"):
+        missing.append("NEO4J_PASSWORD")
+    if not os.environ.get("OPENAI_API_KEY"):
+        missing.append("OPENAI_API_KEY")
+    if missing:
+        logger.error("Missing required environment variables: %s", ", ".join(missing))
+        raise SystemExit(1)
+
+
 if __name__ == "__main__":
+    _check_env()
     mcp.run()
