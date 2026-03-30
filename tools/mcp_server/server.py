@@ -38,28 +38,28 @@ def _get_tool() -> QueryMemoryTool:
         if _tool is not None:
             return _tool
 
-    neo4j_uri = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
-    neo4j_user = os.environ.get("NEO4J_USER", "neo4j")
-    neo4j_password = os.environ.get("NEO4J_PASSWORD", "")
-    if not neo4j_password:
-        raise RuntimeError("NEO4J_PASSWORD environment variable is required")
+        neo4j_uri = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
+        neo4j_user = os.environ.get("NEO4J_USER", "neo4j")
+        neo4j_password = os.environ.get("NEO4J_PASSWORD", "")
+        if not neo4j_password:
+            raise RuntimeError("NEO4J_PASSWORD environment variable is required")
 
-    embedding_api_key = os.environ.get("OPENAI_API_KEY", "")
-    if not embedding_api_key:
-        raise RuntimeError("OPENAI_API_KEY environment variable is required for embeddings")
-    embedding_base_url = os.environ.get("OPENAI_API_BASE") or None
-    embedding_model = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-large")
+        embedding_api_key = os.environ.get("OPENAI_API_KEY", "")
+        if not embedding_api_key:
+            raise RuntimeError("OPENAI_API_KEY environment variable is required for embeddings")
+        embedding_base_url = os.environ.get("OPENAI_API_BASE") or None
+        embedding_model = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-large")
 
-    _memory = AgentMemory(
-        neo4j_uri=neo4j_uri,
-        neo4j_auth=(neo4j_user, neo4j_password),
-        embedding_api_key=embedding_api_key or None,
-        embedding_base_url=embedding_base_url,
-        embedding_model=embedding_model,
-    )
-    _tool = QueryMemoryTool(_memory)
-    logger.info("AgentMemory initialized (Neo4j: %s)", neo4j_uri)
-    return _tool
+        _memory = AgentMemory(
+            neo4j_uri=neo4j_uri,
+            neo4j_auth=(neo4j_user, neo4j_password),
+            embedding_api_key=embedding_api_key or None,
+            embedding_base_url=embedding_base_url,
+            embedding_model=embedding_model,
+        )
+        _tool = QueryMemoryTool(_memory)
+        logger.info("AgentMemory initialized (Neo4j: %s)", neo4j_uri)
+        return _tool
 
 
 @mcp.tool()
