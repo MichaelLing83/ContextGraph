@@ -22,32 +22,47 @@
 - **Date**: 2026-03-30
 - **Environment**: macOS, Python 3.14 (sympy 1.1 incompatible with Python 3.14)
 
-Two runs on the same problem:
+5 runs per group (1 original + 4 replications, all concurrent):
 1. **Treatment** (with memory): MCP `query_memory` tool available
 2. **Control** (without memory): `--pure` flag, no MCP tools
 
-## Results Comparison
+## Results: Individual Runs (n=5 per group)
 
-| Metric | With Memory | Without Memory | Delta |
-|--------|-------------|----------------|-------|
-| **Duration** | 271.5s (4.5min) | 303.9s (5.1min) | +32.3s (+12%) |
-| **Total events** | 159 | 205 | +46 (+29%) |
-| **Text turns** | 28 | 41 | +13 (+46%) |
-| **Tool calls** | 43 | 54 | +11 (+26%) |
-| **Correct fix** | Yes | Yes | Same |
+### With Memory (Treatment)
 
-### Tool Call Breakdown
+| Run | Duration (s) | Events | Text turns | Tool calls | MCP calls | Correct fix |
+|-----|-------------|--------|------------|------------|-----------|-------------|
+| orig | 271.5 | 159 | 28 | 43 | 1 | Yes |
+| run-1 | 208.8 | 124 | 23 | 33 | 1 | Yes |
+| run-2 | 166.1 | 90 | 16 | 24 | 1 | Yes |
+| run-3 | 213.4 | 124 | 23 | 33 | 1 | Yes |
+| run-4 | 238.1 | 121 | 23 | 32 | 1 | Yes |
 
-| Tool | With Memory | Without Memory |
-|------|-------------|----------------|
-| bash | 14 | 18 |
-| read | 11 | 12 |
-| todowrite | 6 | 7 |
-| write | 5 | 8 |
-| edit | 4 | 6 |
-| grep | 2 | 2 |
-| glob | 0 | 1 |
-| query_memory (MCP) | 1 | 0 |
+### Without Memory (Control)
+
+| Run | Duration (s) | Events | Text turns | Tool calls | MCP calls | Correct fix |
+|-----|-------------|--------|------------|------------|-----------|-------------|
+| orig | 303.9 | 205 | 41 | 54 | 0 | Yes |
+| run-1 | 142.3 | 76 | 14 | 20 | 0 | Yes |
+| run-2 | 186.3 | 112 | 23 | 29 | 0 | Yes |
+| run-3 | 123.2 | 83 | 18 | 21 | 0 | Yes |
+| run-4 | 262.7 | 148 | 26 | 40 | 0 | Yes |
+
+## Aggregate Statistics
+
+| Metric | With Memory (mean +/- std) | Without Memory (mean +/- std) |
+|--------|---------------------------|-------------------------------|
+| **Duration (s)** | 219.6 +/- 38.9 [166-272] | 203.7 +/- 77.6 [123-304] |
+| **Total events** | 123.6 +/- 24.4 [90-159] | 124.8 +/- 53.1 [76-205] |
+| **Text turns** | 22.6 +/- 4.3 [16-28] | 24.4 +/- 10.4 [14-41] |
+| **Tool calls** | 33.0 +/- 6.7 [24-43] | 32.8 +/- 14.3 [20-54] |
+| **Correct fix** | 5/5 (100%) | 5/5 (100%) |
+
+**Key finding**: On means, the two groups are essentially **indistinguishable** (duration delta <8%, tool calls delta <1%). The control group has **higher variance** (std 77.6s vs 38.9s for duration), suggesting memory may provide more **consistent** behavior, but the sample is too small to draw statistical conclusions.
+
+### First-run vs Replications
+
+The original single-run comparison (271.5s vs 303.9s, 12% faster with memory) was **not representative** of the broader distribution. The control group's original run was an outlier (spent 8 steps on Python 3.14 compat hacks). Replication runs show the control sometimes finishes faster (run-3: 123.2s).
 
 ## Trajectory Analysis
 
@@ -99,10 +114,11 @@ The control agent spent 8 steps (3 pip installs + 5 compat edits) trying to make
 ### 2. Both agents found the correct fix
 The bug was straightforward enough that both agents eventually identified and fixed it correctly. The `j - pos - other.cols` → `j - other.cols` fix matches the SWE-bench ground truth.
 
-### 3. Efficiency gains are modest for simple bugs
-For this well-hinted, single-line bug:
-- 12% time savings
-- 26% fewer tool calls
+### 3. No significant efficiency gains for simple bugs
+With 5 runs per group, the initial 12%/26% advantage **did not replicate**:
+- Duration: 219.6s vs 203.7s (memory is actually 8% *slower* on average)
+- Tool calls: 33.0 vs 32.8 (effectively identical)
+- **But** memory group has lower variance (std 38.9 vs 77.6), suggesting more consistent behavior
 - The real value of memory may show on harder problems where strategy selection is less obvious
 
 ### 4. Environment friction dominated both runs
@@ -110,5 +126,7 @@ Python 3.14 incompatibility with sympy 1.1 was the primary obstacle. Both agents
 
 ## Raw Data
 
-- `with_memory.jsonl` - Full OpenCode JSON event stream (treatment)
-- `without_memory.jsonl` - Full OpenCode JSON event stream (control)
+- `with_memory.jsonl` - Original run, treatment (with memory)
+- `without_memory.jsonl` - Original run, control (without memory)
+- `run{1-4}_with_memory.jsonl` - Replication runs, treatment
+- `run{1-4}_without_memory.jsonl` - Replication runs, control
