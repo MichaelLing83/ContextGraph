@@ -1,15 +1,14 @@
-"""MCP server exposing ContextGraph agent memory to any MCP-compatible client."""
+"""MCP server exposing ContextGraph agent memory to any MCP-compatible client.
+
+Run from the project root so that ``agent_memory`` is importable via the
+editable install (``uv pip install -e .``).  No ``sys.path`` manipulation
+is needed when the package is installed properly.
+"""
 
 import logging
 import os
-import sys
 
 from mcp.server.fastmcp import FastMCP
-
-# Ensure agent_memory is importable
-_project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
 
 from agent_memory import AgentMemory
 from agent_memory.evaluation.swe_agent_tool import QueryMemoryInput, QueryMemoryTool
@@ -38,14 +37,14 @@ def _get_tool() -> QueryMemoryTool:
         raise RuntimeError("NEO4J_PASSWORD environment variable is required")
 
     embedding_api_key = os.environ.get("OPENAI_API_KEY", "")
-    embedding_base_url = os.environ.get("OPENAI_API_BASE", "https://api.chatanywhere.org")
+    embedding_base_url = os.environ.get("OPENAI_API_BASE") or None
     embedding_model = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-large")
 
     _memory = AgentMemory(
         neo4j_uri=neo4j_uri,
         neo4j_auth=(neo4j_user, neo4j_password),
         embedding_api_key=embedding_api_key or None,
-        embedding_base_url=embedding_base_url or None,
+        embedding_base_url=embedding_base_url,
         embedding_model=embedding_model,
     )
     _tool = QueryMemoryTool(_memory)
@@ -65,6 +64,8 @@ def query_memory(
     previously solved coding problems. Returns relevant strategies,
     similar error fragments, and playbook entries from the context graph.
 
+    The return value is an XML-formatted string (token-efficient for LLMs).
+
     Args:
         current_error: The error message or traceback currently being debugged.
         task_description: Brief description of the current task or issue.
@@ -78,6 +79,7 @@ def query_memory(
         phase=phase,
     )
     output = tool.invoke(input_data)
+    # to_structured() returns an XML string; to_json() is the fallback
     try:
         return output.to_structured()
     except Exception:
