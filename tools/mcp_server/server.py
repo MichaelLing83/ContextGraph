@@ -45,8 +45,7 @@ def _get_tool() -> QueryMemoryTool:
         embedding_base_url = os.environ.get("OPENAI_API_BASE") or None
         embedding_model = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-large")
 
-        # Env validation (mirrors _check_env but guards lazy init too)
-        _check_required_env(neo4j_password, embedding_api_key)
+        _check_required_env()
 
         _memory = AgentMemory(
             neo4j_uri=neo4j_uri,
@@ -99,14 +98,12 @@ def query_memory(
         return output.to_json()
 
 
-def _check_required_env(neo4j_password: str = "", embedding_api_key: str = "") -> None:
-    """Validate required config. Called at startup and inside _get_tool."""
+def _check_required_env() -> None:
+    """Validate required environment variables. Called at startup and in _get_tool."""
     missing = []
-    neo4j_password = neo4j_password or os.environ.get("NEO4J_PASSWORD", "")
-    embedding_api_key = embedding_api_key or os.environ.get("OPENAI_API_KEY", "")
-    if not neo4j_password:
+    if not os.environ.get("NEO4J_PASSWORD"):
         missing.append("NEO4J_PASSWORD")
-    if not embedding_api_key:
+    if not os.environ.get("OPENAI_API_KEY"):
         missing.append("OPENAI_API_KEY")
     if missing:
         msg = f"Missing required environment variables: {', '.join(missing)}"
