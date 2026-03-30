@@ -7,6 +7,7 @@ is needed when the package is installed properly.
 
 import logging
 import os
+import threading
 
 from mcp.server.fastmcp import FastMCP
 
@@ -23,12 +24,19 @@ mcp = FastMCP(
 # Lazy singleton — initialized on first tool call
 _memory: AgentMemory | None = None
 _tool: QueryMemoryTool | None = None
+_init_lock = threading.Lock()
+
+_VALID_PHASES = {"exploring", "understanding", "locating", "fixing", "verifying", "testing"}
 
 
 def _get_tool() -> QueryMemoryTool:
     global _memory, _tool
     if _tool is not None:
         return _tool
+
+    with _init_lock:
+        if _tool is not None:
+            return _tool
 
     neo4j_uri = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
     neo4j_user = os.environ.get("NEO4J_USER", "neo4j")
@@ -37,6 +45,8 @@ def _get_tool() -> QueryMemoryTool:
         raise RuntimeError("NEO4J_PASSWORD environment variable is required")
 
     embedding_api_key = os.environ.get("OPENAI_API_KEY", "")
+    if not embedding_api_key:
+        raise RuntimeError("OPENAI_API_KEY environment variable is required for embeddings")
     embedding_base_url = os.environ.get("OPENAI_API_BASE") or None
     embedding_model = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-large")
 
@@ -72,6 +82,8 @@ def query_memory(
         phase: Current phase of problem solving.
             One of: exploring, understanding, locating, fixing, verifying, testing.
     """
+    if phase not in _VALID_PHASES:
+        phase = "fixing"
     tool = _get_tool()
     input_data = QueryMemoryInput(
         current_error=current_error,
