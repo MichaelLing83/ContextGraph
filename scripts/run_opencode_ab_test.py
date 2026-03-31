@@ -141,9 +141,15 @@ def run_opencode(problem_id, problem_text, work_dir, run_id, with_memory):
 {problem_text}
 
 ## Instructions
-1. Reproduce the bug to confirm it.
-2. Find and fix the root cause in the source code.
-3. Verify your fix works.
+1. Find and fix the root cause in the source code.
+2. Verify your fix works.
+
+## Critical Rules
+- ONLY modify files directly related to the bug. Do NOT fix unrelated issues (e.g., Python version compatibility, deprecation warnings, import modernization).
+- When you fix a pattern in one method (e.g., missing self._print() call), search for ALL other methods in the same class that have the identical pattern and fix them ALL. Use grep to find them.
+- Fix the ROOT CAUSE, not the symptom. Trace the bug to where the incorrect behavior originates, not where it manifests.
+- Keep your changes minimal. Prefer modifying existing function signatures over adding new instance variables or flags.
+- Your git diff should touch ONLY the files needed to fix the bug. Every changed line must be justified by the bug report.
 """
     if with_memory:
         prompt += "\nIMPORTANT: You MUST call the query_memory MCP tool at least once before making any code changes."

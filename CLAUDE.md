@@ -249,6 +249,7 @@ If migrating from the old ChatAnywhere-only setup:
 ## Important Gotchas
 
 1. **Never run simulation experiments** — only real agent runs
+2. **Always run SWE-bench verify before analyzing results** — after OpenCode A/B runs complete, extract diffs and run `swebench.harness.run_evaluation` with `--dataset_name princeton-nlp/SWE-bench_Verified` before drawing any conclusions. Raw completion/timeout metrics are not sufficient; only SWE-bench resolved counts are ground truth
 2. **SWE-agent pip install** from PyPI gives wrong package. Always install from GitHub (editable)
 3. **SWE-agent tool bundle paths**: Relative paths resolve from SWE-agent install dir (`~/codes/SWE-agent/`). Always use absolute paths in YAML configs
 4. **Docker required** for both SWE-agent and OpenHands
