@@ -90,6 +90,15 @@ def query_memory(
         phase=phase,
     )
     output = tool.invoke(input_data)
+
+    # If memory has nothing relevant, return a brief message instead of
+    # verbose empty XML that wastes the agent's context window.
+    has_experiences = bool(output.similar_experiences)
+    has_strategies = bool(output.strategies)
+    has_playbook = bool(output.playbook_text and len(output.playbook_text) > 50)
+    if not has_experiences and not has_strategies and not has_playbook:
+        return "No relevant past experiences found for this query."
+
     # to_structured() returns an XML string; to_json() is the fallback
     try:
         return output.to_structured()

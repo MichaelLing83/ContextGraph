@@ -109,6 +109,11 @@ class PlaybookRetriever:
     Falls back to PlaybookEntry search if no CanonicalRule nodes exist.
     """
 
+    # Minimum RRF score threshold — entries below this are filtered out.
+    # RRF scores are typically in the 0.0-0.1 range; 0.02 removes noise
+    # that appears in every query regardless of relevance.
+    MIN_RRF_SCORE = 0.02
+
     def __init__(self, store, embedder, query_rewriter=None):
         self.store = store
         self.embedder = embedder
@@ -269,7 +274,24 @@ class PlaybookRetriever:
         else:
             selected = candidates[:top_k]
 
-        return selected
+        # Store RRF score on each entry and filter by minimum threshold
+        filtered = []
+        for entry in selected:
+            entry._rrf_score = rrf_scores.get(entry.id, 0.0)
+            if entry._rrf_score >= self.MIN_RRF_SCORE:
+                filtered.append(entry)
+
+        if not filtered and selected:
+            # Keep at least the top entry even if below threshold
+            selected[0]._rrf_score = rrf_scores.get(selected[0].id, 0.0)
+            filtered = [selected[0]]
+
+        logger.debug(
+            "RRF threshold %.3f: %d/%d entries passed",
+            self.MIN_RRF_SCORE, len(filtered), len(selected),
+        )
+
+        return filtered
 
     # === Canonical Rule search channels ===
 

@@ -207,7 +207,7 @@ class AgentMemory:
             return playbook_text + "\n\n" + xml_text
         return xml_text
 
-    def query_playbook(self, current_state: State, top_k: int = 10) -> str:
+    def query_playbook(self, current_state: State, top_k: int = 5) -> str:
         """Query playbook entries relevant to the current state.
 
         Returns playbook-format text wrapped in <memory_playbook> tags,
@@ -215,6 +215,9 @@ class AgentMemory:
 
         Extracts error_type from current_error to enable PPR graph traversal
         (HippoRAG-style multi-hop retrieval from ErrorPattern → CanonicalRule).
+
+        If the formatted output exceeds 2000 characters, re-formats with
+        only the top 3 entries to reduce noise in the agent's context window.
         """
         # Build query text from state
         parts = []
@@ -249,7 +252,14 @@ class AgentMemory:
 
         if not entries:
             return ""
-        return format_playbook(entries, wrap=True)
+
+        result = format_playbook(entries, wrap=True)
+
+        # If output is too long, trim to top 3 entries to reduce noise
+        if len(result) > 2000 and len(entries) > 3:
+            result = format_playbook(entries[:3], wrap=True)
+
+        return result
 
     def check_loop(self, state_history: List[State]) -> Optional[LoopInfo]:
         """
