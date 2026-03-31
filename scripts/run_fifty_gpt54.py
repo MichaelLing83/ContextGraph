@@ -99,6 +99,12 @@ def main():
             subprocess.run(["git", "checkout", "-q", p["base_commit"]],
                            cwd=str(work_dir), check=True, capture_output=True, timeout=30)
             shutil.copy(str(CONFIGS[group]), str(work_dir / "opencode.json"))
+            # Place a minimal CLAUDE.md to prevent OpenCode early exit bug
+            # (GPT-5.4 tries to read CLAUDE.md on startup; missing file causes
+            # the agent to terminate after a single step)
+            (work_dir / "CLAUDE.md").write_text(
+                "# Project\nFix the bug described in the task prompt.\n"
+            )
             tasks.append({"problem_id": p["id"], "problem_text": p["problem"],
                           "work_dir": str(work_dir), "group": group})
     print(f"  {len(tasks)} dirs ready")
