@@ -34,6 +34,9 @@ _VALID_PHASES = {"exploring", "understanding", "locating", "fixing", "verifying"
 # LLM filter model — small and fast
 _FILTER_MODEL = os.environ.get("FILTER_MODEL", "gpt-4o-mini")
 
+# Maximum characters for structured memory output (truncated at rule boundary)
+_MAX_MEMORY_CHARS = int(os.environ.get("MAX_MEMORY_CHARS", "1500"))
+
 
 def _get_filter_client() -> OpenAI | None:
     """Return an OpenAI client for the relevance filter, or None if unavailable."""
@@ -75,39 +78,47 @@ def _parse_rules_from_playbook(playbook_text: str) -> list[tuple[str, str]]:
     return rules
 
 
-def _filter_rules_with_llm(
+def _filter_items_with_llm(
     task_description: str,
     current_error: str,
-    rules: list[tuple[str, str]],
+    items: list[tuple[str, str]],
 ) -> list[str]:
-    """Ask a small LLM which rules are relevant. Returns list of kept rule IDs."""
-    if not rules:
+    """Ask a small LLM which memory items are relevant.
+
+    *items* is a list of ``(item_id, item_text)`` pairs where *item_id*
+    uses the namespaced scheme produced by ``_build_all_items_for_filter``
+    (e.g. ``playbook:shr-00001``, ``strategy:2``, ``experience:0``,
+    ``problem:3``).
+
+    Returns the list of *item_id* values the LLM considers relevant.
+    """
+    if not items:
         return []
 
     client = _get_filter_client()
     if client is None:
-        logger.warning("No OpenAI client for LLM filter; keeping all rules")
-        return [r[0] for r in rules]
+        logger.warning("No OpenAI client for LLM filter; keeping all items")
+        return [r[0] for r in items]
 
-    rule_lines = []
-    for rule_id, rule_text in rules:
-        text = rule_text[:300] + "..." if len(rule_text) > 300 else rule_text
-        rule_lines.append(f"[{rule_id}] {text}")
-    rules_block = "\n".join(rule_lines)
+    item_lines = []
+    for item_id, item_text in items:
+        text = item_text[:300] + "..." if len(item_text) > 300 else item_text
+        item_lines.append(f"[{item_id}] {text}")
+    items_block = "\n".join(item_lines)
 
-    prompt = f"""You are a relevance filter for a coding agent's memory system. Given a bug report and a list of items (rules, strategies, past experiences) retrieved from memory, decide which ones might be useful for solving this specific bug.
+    prompt = f"""You are a relevance filter for a coding agent's memory system. Given a bug report and a list of items (playbook rules, strategies, past experiences, similar problems) retrieved from memory, decide which ones might be useful for solving this specific bug.
 
 ## Bug Report
 **Error:** {current_error[:500]}
 **Task:** {task_description[:500]}
 
 ## Items
-{rules_block}
+{items_block}
 
 ## Instructions
 Return a JSON array of item IDs that could plausibly help an agent working on this bug. Be inclusive — keep items that offer general debugging wisdom applicable to this kind of problem, not just exact matches. Remove only items that are clearly about an unrelated domain or technology. Aim to keep 2-5 items.
 
-Respond with ONLY a JSON array, e.g.: ["shr-00001", "strategy:2"] or []"""
+Respond with ONLY a JSON array, e.g.: ["playbook:shr-00001", "strategy:2", "experience:0"] or []"""
 
     try:
         response = client.chat.completions.create(
@@ -123,11 +134,11 @@ Respond with ONLY a JSON array, e.g.: ["shr-00001", "strategy:2"] or []"""
         kept_ids = json.loads(content)
         if not isinstance(kept_ids, list):
             logger.warning("LLM filter returned non-list: %s; keeping all", content)
-            return [r[0] for r in rules]
+            return [r[0] for r in items]
         return [str(rid) for rid in kept_ids]
     except Exception as e:
-        logger.warning("LLM filter failed (%s); keeping all rules", e)
-        return [r[0] for r in rules]
+        logger.warning("LLM filter failed (%s); keeping all items", e)
+        return [r[0] for r in items]
 
 
 def _rebuild_playbook_text(playbook_text: str, kept_ids: set[str]) -> str:
@@ -211,7 +222,7 @@ def _apply_llm_relevance_filter(
         return
 
     logger.info("LLM filter: evaluating %d total items", len(items))
-    kept_ids = _filter_rules_with_llm(task_description, current_error, items)
+    kept_ids = _filter_items_with_llm(task_description, current_error, items)
     kept_set = set(kept_ids)
     logger.info(
         "LLM filter: kept %d/%d items (removed %d)",
@@ -351,9 +362,9 @@ def query_memory(
         logger.warning("to_structured() failed, falling back to JSON", exc_info=True)
         return output.to_json()
 
-    # Truncate to ~1500 chars at a rule boundary to avoid overwhelming the agent
-    if len(structured) > 1500:
-        structured = _truncate_at_rule_boundary(structured, 1500)
+    # Truncate at a rule boundary to avoid overwhelming the agent
+    if len(structured) > _MAX_MEMORY_CHARS:
+        structured = _truncate_at_rule_boundary(structured, _MAX_MEMORY_CHARS)
 
     return structured
 
@@ -389,12 +400,19 @@ def _truncate_at_rule_boundary(text: str, max_chars: int) -> str:
             if last_newline > 0:
                 truncated = truncated[:last_newline].rstrip()
 
-    # Close any unclosed wrapper tags
-    if '<memory_playbook>' in truncated and '</memory_playbook>' not in truncated:
-        truncated += '\n</memory_playbook>'
-    for tag in ('STRATEGIES', 'EXPERIENCES', 'PROBLEMS'):
-        if f'<{tag}>' in truncated and f'</{tag}>' not in truncated:
-            truncated += f'\n</{tag}>'
+    # Close any unclosed wrapper tags (detected dynamically rather than
+    # hardcoding specific tag names so that new sections are handled
+    # automatically).
+    open_tags = re.findall(r'<([A-Za-z_][\w-]*)(?:\s[^>]*)?>',  truncated)
+    close_tags = re.findall(r'</([A-Za-z_][\w-]*)>', truncated)
+    close_counts: dict[str, int] = {}
+    for t in close_tags:
+        close_counts[t] = close_counts.get(t, 0) + 1
+    for t in reversed(open_tags):
+        if close_counts.get(t, 0) > 0:
+            close_counts[t] -= 1
+        else:
+            truncated += f'\n</{t}>'
 
     return truncated
 
