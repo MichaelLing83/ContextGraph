@@ -448,11 +448,21 @@ def main():
     embedder = get_embedding_client(
         "openai",
         api_key=os.environ.get("OPENAI_API_KEY", ""),
-        base_url=os.environ.get(
-            "OPENAI_API_BASE", "https://api.chatanywhere.org"
-        ),
+        base_url=os.environ.get("OPENAI_API_BASE"),
         model="text-embedding-3-large",
     )
+
+    # Preflight check: ensure playbook_embedding vector index exists
+    idx_result = store.driver.execute_query(
+        "SHOW INDEXES YIELD name WHERE name = 'playbook_embedding' RETURN name"
+    )
+    if not idx_result.records:
+        print(
+            "ERROR: 'playbook_embedding' vector index not found. "
+            "Run `scripts/ingest_playbook.py` first to create the index."
+        )
+        store.driver.close()
+        sys.exit(1)
 
     # Get next ID for the repo prefix
     result = store.driver.execute_query(
