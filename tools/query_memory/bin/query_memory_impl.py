@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """SWE-agent tool: query the context graph memory for debugging strategies."""
 
-import json
 import os
-import subprocess
 import sys
 
 
@@ -29,21 +27,13 @@ def main():
     if project_root and project_root not in sys.path:
         sys.path.insert(0, project_root)
 
-    # Install neo4j if not available
+    # Verify neo4j driver is available (must be pre-installed via install.sh)
     try:
         import neo4j  # noqa: F401
-    except (ImportError, SyntaxError):
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-q", "neo4j"],  # noqa: S603
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        if result.returncode != 0:
-            print(f"ERROR: Failed to install neo4j driver (exit {result.returncode})", file=sys.stderr)
-            if result.stderr:
-                print(result.stderr, file=sys.stderr)
-            print("RESULT: ERROR - neo4j driver installation failed", flush=True)
-            sys.exit(1)
+    except (ImportError, SyntaxError) as exc:
+        print(f"ERROR: neo4j driver not available: {exc}", file=sys.stderr)
+        print("Install it via install.sh before running this tool.", file=sys.stderr)
+        sys.exit(1)
 
     try:
         from agent_memory import AgentMemory
@@ -99,14 +89,8 @@ def main():
             memory.close()
 
     except Exception as e:
-        error_output = {
-            "similar_experiences": [],
-            "strategies": [],
-            "similar_problems": [],
-            "warnings": [f"Memory query failed: {e}"],
-            "playbook_text": "",
-        }
-        print(json.dumps(error_output, indent=2))
+        print(f"ERROR: Memory query failed: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,17 @@ from agent_memory.models import State
 if TYPE_CHECKING:
     from agent_memory import AgentMemory
 
+# Map tool-facing phase names to valid State phases
+# (State.VALID_PHASES = {"understanding", "locating", "fixing", "testing"})
+PHASE_MAP: Dict[str, str] = {
+    "exploring": "understanding",
+    "understanding": "understanding",
+    "locating": "locating",
+    "fixing": "fixing",
+    "verifying": "testing",
+    "testing": "testing",
+}
+
 
 @dataclass
 class QueryMemoryInput:
@@ -200,12 +211,13 @@ class QueryMemoryTool:
             QueryMemoryOutput with relevant experiences
         """
         # Create state for query
+        normalized_phase = PHASE_MAP.get(input_data.phase, "fixing")
         state = State(
             tools=["bash", "edit", "view"],
             repo_summary="",
             task_description=input_data.task_description,
             current_error=input_data.current_error,
-            phase="fixing",  # simplified — phase filtering removed
+            phase=normalized_phase,
         )
 
         # Query memory — retriever now returns enriched fragments
@@ -214,12 +226,8 @@ class QueryMemoryTool:
         # Get playbook context
         playbook_text = self.memory.query_playbook(state)
 
-        # Use enriched fragments from the retriever if available
-        enriched = getattr(context, '_enriched_fragments', None)
-        if enriched is None:
-            # Fallback: access retriever directly for enriched data
-            retrieval_result = self.memory.retriever.retrieve(state)
-            enriched = retrieval_result.enriched_fragments
+        # Use enriched fragments stored on MemoryContext by query()
+        enriched = context.enriched_fragments
 
         fragments = []
         for ef in enriched[:5]:

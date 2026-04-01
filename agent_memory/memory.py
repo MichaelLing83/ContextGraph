@@ -8,7 +8,7 @@ from agent_memory.models import State, Methodology, Fragment, Strategy, ProblemS
 from agent_memory.neo4j_store import Neo4jStore
 from agent_memory.embeddings import get_embedding_client
 from agent_memory.writer import MemoryWriter, RawTrajectory
-from agent_memory.retriever import MemoryRetriever
+from agent_memory.retriever import MemoryRetriever, EnrichedFragment
 from agent_memory.consolidator import MemoryConsolidator
 from agent_memory.loop_detector import LoopDetector, LoopInfo
 from agent_memory.entity_resolver import EntityResolver
@@ -25,6 +25,7 @@ class MemoryContext:
 
     methodologies: List[Methodology] = field(default_factory=list)
     similar_fragments: List[Fragment] = field(default_factory=list)
+    enriched_fragments: List[EnrichedFragment] = field(default_factory=list)
     strategies: List[Strategy] = field(default_factory=list)
     problem_summaries: List[ProblemSummary] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
@@ -35,8 +36,8 @@ class MemoryContext:
     def to_structured(self) -> str:
         """Return structured XML representation of this context."""
         from agent_memory.retriever import RetrievalResult, EnrichedFragment
-        # Convert similar_fragments to enriched_fragments for the formatter
-        enriched = [
+        # Use stored enriched_fragments; fall back to synthetic ones from similar_fragments
+        enriched = self.enriched_fragments or [
             EnrichedFragment(fragment=f, relevance_score=max(0.0, 0.8 - (i * 0.1)))
             for i, f in enumerate(self.similar_fragments)
         ]
@@ -180,6 +181,7 @@ class AgentMemory:
         return MemoryContext(
             methodologies=result.methodologies,
             similar_fragments=result.similar_fragments,
+            enriched_fragments=result.enriched_fragments,
             strategies=result.strategies,
             problem_summaries=result.problem_summaries,
             warnings=result.warnings,
