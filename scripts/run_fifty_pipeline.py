@@ -82,7 +82,8 @@ def verify_worker():
                  "--predictions_path", str(pred_file),
                  "--max_workers", str(VERIFY_WORKERS),
                  "--run_id", run_id,
-                 "--report_dir", str(report_dir)],
+                 "--report_dir", str(report_dir),
+                 "--cache_level", "instance"],
                 capture_output=True, text=True, timeout=1800,
                 cwd=str(REPO_ROOT),
             )
