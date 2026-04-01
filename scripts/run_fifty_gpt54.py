@@ -105,6 +105,11 @@ def main():
             (work_dir / "CLAUDE.md").write_text(
                 "# Project\nFix the bug described in the task prompt.\n"
             )
+            # Protect CLAUDE.md and opencode.json from git clean/checkout
+            exclude = work_dir / ".git" / "info" / "exclude"
+            exclude.parent.mkdir(parents=True, exist_ok=True)
+            with open(exclude, "a") as ef:
+                ef.write("\nCLAUDE.md\nopencode.json\n")
             tasks.append({"problem_id": p["id"], "problem_text": p["problem"],
                           "work_dir": str(work_dir), "group": group})
     print(f"  {len(tasks)} dirs ready")
