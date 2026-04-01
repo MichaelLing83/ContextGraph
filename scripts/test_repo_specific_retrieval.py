@@ -5,9 +5,7 @@ Queries problems 31-40 from the v3 experiment and checks whether
 repo-specific strategies appear in the enhanced graph's results.
 """
 
-import json
 import os
-import sys
 
 from neo4j import GraphDatabase
 
@@ -40,17 +38,8 @@ QUERY_STRINGS = {
 }
 
 
-def query_graph(driver, query_text, top_k=10):
+def query_graph(driver, query_text, embedder, top_k=10):
     """Query the graph for playbook entries using vector similarity."""
-    # First get embedding via the graph's built-in vector index
-    from agent_memory.embeddings import get_embedding_client
-
-    embedder = get_embedding_client(
-        "openai",
-        api_key=os.environ.get("OPENAI_API_KEY", ""),
-        base_url=os.environ.get("OPENAI_API_BASE", "https://api.chatanywhere.org"),
-        model="text-embedding-3-large",
-    )
     embedding = embedder.embed(query_text)
 
     result = driver.execute_query(
@@ -79,15 +68,29 @@ def query_graph(driver, query_text, top_k=10):
 
 
 def main():
+    from agent_memory.embeddings import get_embedding_client
+
+    neo4j_user = os.environ.get("NEO4J_USER", "neo4j")
+    neo4j_password = os.environ.get("NEO4J_PASSWORD", "contextgraph123")
+    baseline_uri = os.environ.get("NEO4J_BASELINE_URI", "bolt://localhost:7687")
+    repospec_uri = os.environ.get("NEO4J_URI", "bolt://localhost:7689")
+
     baseline_driver = GraphDatabase.driver(
-        "bolt://localhost:7687", auth=("neo4j", "contextgraph123")
+        baseline_uri, auth=(neo4j_user, neo4j_password)
     )
     repospec_driver = GraphDatabase.driver(
-        "bolt://localhost:7689", auth=("neo4j", "contextgraph123")
+        repospec_uri, auth=(neo4j_user, neo4j_password)
+    )
+
+    embedder = get_embedding_client(
+        "openai",
+        api_key=os.environ.get("OPENAI_API_KEY", ""),
+        base_url=os.environ.get("OPENAI_API_BASE"),
+        model="text-embedding-3-large",
     )
 
     print("=" * 80)
-    print("COMPARISON: Baseline (port 7687) vs Repo-Specific (port 7689)")
+    print(f"COMPARISON: Baseline ({baseline_uri}) vs Repo-Specific ({repospec_uri})")
     print("=" * 80)
 
     # Verify repo-specific entries exist
@@ -117,8 +120,8 @@ def main():
         print()
 
         # Query both graphs
-        baseline_results = query_graph(baseline_driver, query, top_k=10)
-        repospec_results = query_graph(repospec_driver, query, top_k=10)
+        baseline_results = query_graph(baseline_driver, query, embedder, top_k=10)
+        repospec_results = query_graph(repospec_driver, query, embedder, top_k=10)
 
         # Check if any repo-specific result appears in enhanced graph
         repo_results = [r for r in repospec_results if r["prefix"] == "repo"]
