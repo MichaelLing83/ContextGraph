@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>记忆模块 Context Graph Case Study</title>
+<link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+/* === VIEWPORT BASE === */
+html, body { height: 100%; overflow-x: hidden; }
+html { scroll-snap-type: y mandatory; scroll-behavior: smooth; }
+.slide {
+    width: 100vw; height: 100vh; height: 100dvh;
+    overflow: hidden; scroll-snap-align: start;
+    display: flex; flex-direction: column; position: relative;
+}
+.slide-content {
+    flex: 1; display: flex; flex-direction: column; justify-content: center;
+    max-height: 100%; overflow: hidden; padding: var(--slide-padding);
+}
+:root {
+    --title-size: clamp(1.8rem, 5vw, 3.5rem);
+    --h2-size: clamp(1rem, 2.5vw, 1.6rem);
+    --h3-size: clamp(0.85rem, 1.8vw, 1.15rem);
+    --body-size: clamp(0.65rem, 1.2vw, 0.9rem);
+    --small-size: clamp(0.55rem, 0.9vw, 0.75rem);
+    --slide-padding: clamp(1rem, 3vw, 3rem);
+    --content-gap: clamp(0.3rem, 1.2vw, 1rem);
+    --element-gap: clamp(0.15rem, 0.6vw, 0.5rem);
+    --ink: #1a1a2e; --paper: #faf9f6; --accent: #c0392b; --accent-light: #e8d5d0;
+    --muted: #6b7280; --code-bg: #f3f0eb; --border: #d4d0c8;
+    --success: #27ae60; --fail: #c0392b;
+}
+@media (max-height: 700px) { :root { --slide-padding: clamp(0.6rem, 2vw, 1.5rem); --content-gap: clamp(0.2rem, 0.8vw, 0.6rem); --title-size: clamp(1.4rem, 4vw, 2.5rem); --h2-size: clamp(0.85rem, 2vw, 1.3rem); } }
+@media (max-height: 600px) { :root { --slide-padding: clamp(0.4rem, 1.5vw, 1rem); --title-size: clamp(1.2rem, 3.5vw, 2rem); --body-size: clamp(0.6rem, 1vw, 0.8rem); } .nav-dots { display: none; } }
+@media (max-height: 500px) { :root { --slide-padding: clamp(0.3rem, 1.2vw, 0.8rem); --title-size: clamp(1rem, 3vw, 1.5rem); --body-size: clamp(0.55rem, 0.9vw, 0.7rem); } }
+@media (max-width: 600px) { :root { --title-size: clamp(1.3rem, 6vw, 2.2rem); } .three-cols { grid-template-columns: 1fr !important; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.2s !important; } html { scroll-behavior: auto; } }
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Noto Sans SC', 'Crimson Pro', serif; background: var(--paper); color: var(--ink); }
+code, .mono { font-family: 'JetBrains Mono', monospace; font-size: 0.9em; }
+h1 { font-size: var(--title-size); font-weight: 700; letter-spacing: -0.02em; }
+h2 { font-size: var(--h2-size); font-weight: 600; margin-bottom: var(--element-gap); }
+h3 { font-size: var(--h3-size); font-weight: 500; color: var(--muted); }
+p, li { font-size: var(--body-size); line-height: 1.5; color: #374151; }
+.slide { background: var(--paper); }
+.slide-content { max-width: min(92vw, 1100px); margin: 0 auto; }
+
+.tag { display: inline-block; padding: 0.1em 0.5em; border-radius: 3px; font-size: var(--small-size); font-weight: 500; }
+.tag-red { background: var(--accent-light); color: var(--accent); }
+.tag-green { background: #d5f0de; color: var(--success); }
+.tag-gray { background: #e5e7eb; color: var(--muted); }
+
+table { width: 100%; border-collapse: collapse; font-size: var(--body-size); }
+th { text-align: left; font-weight: 500; color: var(--muted); border-bottom: 2px solid var(--ink); padding: 0.3em 0.6em; font-size: var(--small-size); text-transform: uppercase; letter-spacing: 0.05em; }
+td { padding: 0.3em 0.6em; border-bottom: 1px solid var(--border); }
+tr:last-child td { border-bottom: 2px solid var(--ink); }
+.num { font-family: 'JetBrains Mono', monospace; font-weight: 500; }
+.num-good { color: var(--success); }
+.num-bad { color: var(--fail); }
+
+.code-block { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: clamp(0.3rem, 1vw, 0.6rem); font-size: var(--small-size); font-family: 'JetBrains Mono', monospace; line-height: 1.4; overflow: hidden; white-space: pre-wrap; }
+
+.three-cols { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--content-gap); align-items: start; }
+.two-cols { display: grid; grid-template-columns: 1fr 1fr; gap: var(--content-gap); align-items: start; }
+
+.flow-col { display: flex; flex-direction: column; gap: clamp(0.1rem, 0.4vw, 0.3rem); }
+.flow-box { background: white; border: 1px solid var(--border); border-radius: 3px; padding: 0.25em 0.5em; font-size: var(--small-size); }
+.flow-arrow { color: var(--muted); font-size: var(--small-size); text-align: center; }
+
+.accent-line { width: 40px; height: 3px; background: var(--accent); margin-bottom: var(--element-gap); }
+.sep { width: 100%; height: 1px; background: var(--border); margin: var(--element-gap) 0; }
+
+.reveal { opacity: 0; transform: translateY(8px); transition: opacity 0.4s ease, transform 0.4s ease; }
+.reveal.visible { opacity: 1; transform: translateY(0); }
+
+.nav-dots { position: fixed; right: clamp(0.5rem, 1.5vw, 1rem); top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 100; }
+.nav-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border); border: none; cursor: pointer; transition: all 0.3s; }
+.nav-dot.active { background: var(--accent); transform: scale(1.4); }
+
+.edit-toggle { position: fixed; top: 10px; left: 10px; z-index: 200; background: var(--ink); color: white; border: none; padding: 0.2em 0.6em; border-radius: 3px; font-size: 11px; cursor: pointer; opacity: 0; transition: opacity 0.3s; }
+.edit-toggle:hover, body:hover .edit-toggle { opacity: 0.5; }
+body.editing [contenteditable] { outline: 2px dashed var(--accent); outline-offset: 2px; cursor: text; }
+
+.section-label { font-size: var(--small-size); font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.2em; }
+</style>
+</head>
+<body>
+
+<nav class="nav-dots"></nav>
+<button class="edit-toggle" onclick="toggleEdit()">E 编辑</button>
+
+<!-- === SLIDE 1: Title === -->
+<section class="slide" id="slide-1">
+<div class="slide-content" style="justify-content: center; align-items: flex-start;">
+    <div class="accent-line reveal"></div>
+    <h1 class="reveal" contenteditable="false">记忆模块 Context Graph</h1>
+    <h3 class="reveal" contenteditable="false" style="margin-top: var(--element-gap);">Case Study: <code>django__django-15382</code></h3>
+    <p class="reveal" contenteditable="false" style="margin-top: var(--content-gap); color: var(--muted);">
+        <span class="tag tag-green">Memory 6/6 (100%)</span>&nbsp;
+        <span class="tag tag-gray">NoMem 2/5 (40%)</span>&nbsp;
+        <span style="font-size:var(--small-size);">SWE-bench Verified · 11 runs · +60pp</span>
+    </p>
+</div>
+</section>
+
+<!-- === SLIDE 2: Everything === -->
+<section class="slide" id="slide-2">
+<div class="slide-content" style="justify-content: flex-start; padding-top: clamp(0.8rem, 2vw, 1.5rem);">
+
+    <!-- Row 1: Problem + Results -->
+    <div class="two-cols reveal">
+        <div>
+            <div class="section-label">问题</div>
+            <p contenteditable="false"><code>~Exists(Model.objects.none())</code> 过滤时整个 WHERE 块被移除，抛出 <code>EmptyResultSet</code></p>
+            <p contenteditable="false" style="font-size:var(--small-size); color:var(--muted); margin-top:0.2em;">GT: 在 <code>Exists.as_sql()</code> 中 catch <code>EmptyResultSet</code>，negated 时返回空元组</p>
+        </div>
+        <div>
+            <div class="section-label">结果</div>
+            <table>
+                <thead><tr><th>组</th><th>Resolved</th><th>Rate</th></tr></thead>
+                <tbody>
+                    <tr><td><span class="tag tag-green">有记忆</span></td><td class="num num-good">6/6</td><td class="num num-good">100%</td></tr>
+                    <tr><td><span class="tag tag-gray">无记忆</span></td><td class="num num-bad">2/5</td><td class="num num-bad">40%</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="sep"></div>
+
+    <!-- Row 2: Memory content -->
+    <div class="reveal">
+        <div class="section-label">记忆返回内容（从 1,795 条轨迹 / 319 repos 检索）</div>
+    </div>
+    <div class="three-cols reveal">
+        <div>
+            <h3 style="font-size:var(--small-size); font-weight:600; margin-bottom:0.2em;">策略 · anti_pattern (0.85)</h3>
+            <div class="code-block" contenteditable="false">来源: fgmacedo/python-statemachine
+
+不要为复现 framework bug 搭建
+完整外部框架环境（Django app、
+migrations、数据库），用纯 Python
+隔离测试</div>
+        </div>
+        <div>
+            <h3 style="font-size:var(--small-size); font-weight:600; margin-bottom:0.2em;">策略 · debugging (0.80)</h3>
+            <div class="code-block" contenteditable="false">来源: iterative/dvc
+
+遇到陌生错误时，先创建独立的
+复现脚本来隔离和理解根因，
+再尝试修复</div>
+        </div>
+        <div>
+            <h3 style="font-size:var(--small-size); font-weight:600; margin-bottom:0.2em;">相似经验 · ✓ 10步成功</h3>
+            <div class="code-block" contenteditable="false">来源: tonioo/sievelib
+
+导出使用 <strong>Exists 命令</strong>的 Sieve
+过滤条件时失败。Agent 定位到
+args_as_tuple，修改了 <strong>Exists
+命令的参数格式化</strong>
+
+→ Exists + 参数处理模式匹配</div>
+        </div>
+    </div>
+
+    <div class="sep"></div>
+
+    <!-- Row 3: Causal comparison -->
+    <div class="two-cols reveal">
+        <div>
+            <div class="section-label" style="color:var(--success);">✓ 有记忆 → 成功</div>
+            <div class="flow-col">
+                <div class="flow-box" style="border-left: 3px solid var(--success);" contenteditable="false">anti_pattern 阻止搭建 Django 环境 → 节省时间</div>
+                <div class="flow-arrow">↓</div>
+                <div class="flow-box" style="border-left: 3px solid var(--success);" contenteditable="false">sievelib Exists 经验引导 → 聚焦 Exists.as_sql()</div>
+                <div class="flow-arrow">↓</div>
+                <div class="flow-box" style="border-left: 3px solid var(--success);" contenteditable="false">创建 10 个隔离测试 → 定位 EmptyResultSet 路径</div>
+                <div class="flow-arrow">↓</div>
+                <div class="flow-box" style="border-left: 3px solid var(--success); font-weight:600;" contenteditable="false">添加 try/except EmptyResultSet → SWE-bench ✓</div>
+            </div>
+        </div>
+        <div>
+            <div class="section-label" style="color:var(--fail);">✗ 无记忆 → 失败</div>
+            <div class="flow-col">
+                <div class="flow-box" style="border-left: 3px solid var(--fail);" contenteditable="false">用 formatter 重写整个文件 → 1280 行 quote 变更</div>
+                <div class="flow-arrow">↓</div>
+                <div class="flow-box" style="border-left: 3px solid var(--fail);" contenteditable="false">在巨大 diff 中迷失 → 没找到 Exists.as_sql()</div>
+                <div class="flow-arrow">↓</div>
+                <div class="flow-box" style="border-left: 3px solid var(--fail);" contenteditable="false">只做了 reformatting → 核心修复缺失</div>
+                <div class="flow-arrow">↓</div>
+                <div class="flow-box" style="border-left: 3px solid var(--fail); font-weight:600;" contenteditable="false">无 EmptyResultSet 处理 → SWE-bench ✗</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <p class="reveal" contenteditable="false" style="font-size:var(--small-size); color:var(--muted); margin-top:var(--element-gap); text-align:right;">
+        数据: nebius/SWE-agent-trajectories (319 repos)，与 SWE-bench 零重叠
+    </p>
+
+</div>
+</section>
+
+<script>
+const slides = document.querySelectorAll('.slide');
+const dotsNav = document.querySelector('.nav-dots');
+slides.forEach((s, i) => {
+    const d = document.createElement('button');
+    d.className = 'nav-dot'; d.addEventListener('click', () => s.scrollIntoView({behavior:'smooth'}));
+    dotsNav.appendChild(d);
+});
+const dots = document.querySelectorAll('.nav-dot');
+new IntersectionObserver(es => es.forEach(e => {
+    if (e.isIntersecting) { const i = [...slides].indexOf(e.target); dots.forEach((d,j) => d.classList.toggle('active', i===j)); }
+}), {threshold:0.5}).observe(slides[0]);
+if (slides[1]) new IntersectionObserver(es => es.forEach(e => {
+    if (e.isIntersecting) { dots.forEach((d,j) => d.classList.toggle('active', j===1)); }
+}), {threshold:0.5}).observe(slides[1]);
+
+new IntersectionObserver(es => es.forEach(e => { if(e.isIntersecting) e.target.classList.add('visible'); }), {threshold:0.1})
+    .observe(document.querySelector('.reveal'));
+document.querySelectorAll('.reveal').forEach(el => new IntersectionObserver(es => es.forEach(e => { if(e.isIntersecting) e.target.classList.add('visible'); }), {threshold:0.1}).observe(el));
+
+document.addEventListener('keydown', e => {
+    const c = [...slides].findIndex(s => s.getBoundingClientRect().top >= -10);
+    if ((e.key==='ArrowDown'||e.key===' ')&&c<slides.length-1) { e.preventDefault(); slides[c+1].scrollIntoView({behavior:'smooth'}); }
+    else if (e.key==='ArrowUp'&&c>0) { e.preventDefault(); slides[c-1].scrollIntoView({behavior:'smooth'}); }
+    else if (e.key==='e'||e.key==='E') toggleEdit();
+    else if ((e.ctrlKey||e.metaKey)&&e.key==='s') { e.preventDefault(); localStorage.setItem('pres-cg', document.documentElement.outerHTML); const b=document.querySelector('.edit-toggle'); b.textContent='已保存 ✓'; b.style.opacity='1'; setTimeout(()=>{b.textContent='E 编辑';b.style.opacity='';},1500); }
+});
+function toggleEdit() {
+    document.body.classList.toggle('editing');
+    const ed = document.body.classList.contains('editing');
+    document.querySelectorAll('[contenteditable]').forEach(el => el.contentEditable = ed?'true':'false');
+}
+</script>
+</body>
+</html>
