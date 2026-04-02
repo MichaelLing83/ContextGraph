@@ -32,16 +32,56 @@ REPO_URLS = {
 }
 
 # Configurable
-TREATMENT_CONFIG = Path(os.environ.get(
-    "TREATMENT_CONFIG", str(REPO_ROOT / "configs" / "opencode_gpt54_da_combo.json")))
+# Config templates are in configs/; the runner generates runtime configs
+# with REPO_ROOT resolved to the actual checkout path.
 NOMEM_CONFIG = Path(os.environ.get(
     "NOMEM_CONFIG", str(REPO_ROOT / "configs" / "opencode_gpt54_nomem.json")))
+NEO4J_PORT = os.environ.get("NEO4J_PORT", "7689")  # 7687=baseline, 7689=repo-specific
 PROBLEMS_FILE = Path(os.environ.get(
     "PROBLEMS_FILE", str(REPO_ROOT / "results" / "case_studies" / "fifty_gpt54" / "problems.json")))
 OPENCODE_WORKERS = int(os.environ.get("OPENCODE_WORKERS", "1"))  # sequential by default
 VERIFY_WORKERS = int(os.environ.get("VERIFY_WORKERS", "4"))
 TIMEOUT = int(os.environ.get("OPENCODE_TIMEOUT", "900"))
 CONSECUTIVE_FAIL_LIMIT = int(os.environ.get("FAIL_LIMIT", "5"))
+K_RUNS = int(os.environ.get("K_RUNS", "1"))  # runs per problem per group (for pass@k)
+
+
+def _generate_treatment_config() -> Path:
+    """Generate treatment opencode config with REPO_ROOT resolved at runtime."""
+    config = {
+        "$schema": "https://opencode.ai/config.json",
+        "model": "openrouter/openai/gpt-5.4",
+        "provider": {"openrouter": {}},
+        "mcp": {
+            "contextgraph-memory": {
+                "type": "local",
+                "command": [
+                    "uv", "run", "--directory", str(REPO_ROOT),
+                    "python", "tools/mcp_server/server.py",
+                ],
+                "environment": {
+                    "NEO4J_URI": f"bolt://localhost:{NEO4J_PORT}",
+                    "NEO4J_USER": "neo4j",
+                    "NEO4J_PASSWORD": "{env:NEO4J_PASSWORD}",
+                    "OPENAI_API_KEY": "{env:OPENAI_API_KEY}",
+                    "OPENAI_API_BASE": "{env:OPENAI_API_BASE}",
+                    "EMBEDDING_MODEL": "text-embedding-3-large",
+                    "FILTER_MODEL": "gpt-4o-mini",
+                    "MAX_MEMORY_CHARS": "1500",
+                },
+                "enabled": True,
+                "timeout": 30000,
+            }
+        },
+    }
+    out = BASE / "treatment_config.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w") as f:
+        json.dump(config, f, indent=2)
+    return out
+
+
+TREATMENT_CONFIG: Path = None  # type: ignore  # set in main() after BASE exists
 
 
 def log(msg):
@@ -129,10 +169,11 @@ def setup_work_dir(p, group, config_path):
     return work_dir
 
 
-def run_opencode(p, group, is_treatment):
+def run_opencode(p, group, is_treatment, run_k=0):
     pid = p["id"]
-    work_dir = BASE / pid / group
-    out_file = BASE / pid / f"result_{group}.jsonl"
+    suffix = f"{group}_k{run_k}" if run_k > 0 else group
+    work_dir = BASE / pid / suffix
+    out_file = BASE / pid / f"result_{suffix}.jsonl"
 
     prompt = (f"You are a coding agent tasked with fixing a bug.\n\n"
               f"## Bug Report ({pid})\n\n{p['problem'][:3000]}\n\n"
@@ -166,15 +207,17 @@ def run_opencode(p, group, is_treatment):
                           cwd=str(work_dir), capture_output=True, text=True).stdout.strip()
 
     return {
-        "problem_id": pid, "group": group, "returncode": result.returncode,
+        "problem_id": pid, "group": group, "run_k": run_k,
+        "returncode": result.returncode,
         "elapsed": round(elapsed, 1), "events": events, "mcp_called": mcp > 0,
         "has_patch": bool(diff), "early_exit": elapsed < 10,
     }
 
 
-def extract_diff(p, group):
+def extract_diff(p, group, run_k=0):
     """Extract git diff as a SWE-bench prediction."""
-    work_dir = BASE / p["id"] / group
+    suffix = f"{group}_k{run_k}" if run_k > 0 else group
+    work_dir = BASE / p["id"] / suffix
     diff = subprocess.run(["git", "diff", "HEAD"], cwd=str(work_dir),
                           capture_output=True, text=True).stdout.strip()
     return {
@@ -187,9 +230,14 @@ def extract_diff(p, group):
 # ── Main ──────────────────────────────────────────────────────
 
 def main():
+    global TREATMENT_CONFIG
     BASE.mkdir(parents=True, exist_ok=True)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     VERIFY_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Generate treatment config with resolved paths
+    TREATMENT_CONFIG = _generate_treatment_config()
+    log(f"Treatment config: {TREATMENT_CONFIG} (Neo4j port {NEO4J_PORT})")
 
     with open(PROBLEMS_FILE) as f:
         problems = json.load(f)
@@ -211,66 +259,76 @@ def main():
     verify_thread.start()
 
     # Run problems
-    log(f"=== Running {len(problems)} problems ===")
+    total_runs = len(problems) * 2 * K_RUNS
+    log(f"=== Running {len(problems)} problems x 2 groups x {K_RUNS} runs = {total_runs} ===")
     results = []
-    status = {"total": len(problems) * 2, "completed": 0, "early_exits": 0,
-              "errors": [], "verified": 0}
+    status = {"total": total_runs, "completed": 0, "early_exits": 0,
+              "errors": [], "verified": 0, "k_runs": K_RUNS}
     consecutive_failures = 0
-    batch_preds = {"treatment": [], "nomem": []}
+    batch_preds = {}  # keyed by "treatment_k{k}" / "nomem_k{k}"
 
     for i, p in enumerate(problems):
         pid = p["id"]
-        pair_results = {}
 
-        for group, config, is_treatment in [
-            ("treatment", TREATMENT_CONFIG, True),
-            ("nomem", NOMEM_CONFIG, False),
-        ]:
-            log(f"[{i+1}/{len(problems)}] {pid} {group} — starting")
-            try:
-                setup_work_dir(p, group, config)
-                r = run_opencode(p, group, is_treatment)
-                results.append(r)
-                pair_results[group] = r
+        for k in range(K_RUNS):
+            for group, config, is_treatment in [
+                ("treatment", TREATMENT_CONFIG, True),
+                ("nomem", NOMEM_CONFIG, False),
+            ]:
+                run_k = k + 1 if K_RUNS > 1 else 0
+                suffix = f"{group}_k{run_k}" if run_k > 0 else group
+                log(f"[{i+1}/{len(problems)}] {pid} {suffix} — starting")
+                try:
+                    setup_work_dir(p, suffix, config)
+                    r = run_opencode(p, group, is_treatment, run_k)
+                    results.append(r)
 
-                flags = ""
-                if r["early_exit"]: flags += " EARLY_EXIT"; status["early_exits"] += 1; consecutive_failures += 1
-                if is_treatment and not r["mcp_called"]: flags += " NO_MCP"
-                if r["has_patch"]: flags += " PATCH"
-                log(f"[{i+1}/{len(problems)}] {pid} {group} — {r['elapsed']}s, {r['events']} events{flags}")
-                if not r["early_exit"]: consecutive_failures = 0
+                    flags = ""
+                    if r["early_exit"]: flags += " EARLY_EXIT"; status["early_exits"] += 1; consecutive_failures += 1
+                    if is_treatment and not r["mcp_called"]: flags += " NO_MCP"
+                    if r["has_patch"]: flags += " PATCH"
+                    log(f"[{i+1}/{len(problems)}] {pid} {suffix} — {r['elapsed']}s, {r['events']} events{flags}")
+                    if not r["early_exit"]: consecutive_failures = 0
 
-            except Exception as e:
-                log(f"[{i+1}/{len(problems)}] {pid} {group} — ERROR: {e}")
-                results.append({"problem_id": pid, "group": group, "error": str(e)})
-                status["errors"].append(f"{pid}_{group}: {str(e)[:100]}")
-                consecutive_failures += 1
+                except Exception as e:
+                    log(f"[{i+1}/{len(problems)}] {pid} {suffix} — ERROR: {e}")
+                    results.append({"problem_id": pid, "group": group, "run_k": run_k, "error": str(e)})
+                    status["errors"].append(f"{pid}_{suffix}: {str(e)[:100]}")
+                    consecutive_failures += 1
 
-            status["completed"] += 1
-            update_status(status)
+                status["completed"] += 1
+                update_status(status)
+
+                if consecutive_failures >= CONSECUTIVE_FAIL_LIMIT:
+                    log(f"ABORT: {consecutive_failures} consecutive failures")
+                    break
 
             if consecutive_failures >= CONSECUTIVE_FAIL_LIMIT:
-                log(f"ABORT: {consecutive_failures} consecutive failures")
                 break
 
         if consecutive_failures >= CONSECUTIVE_FAIL_LIMIT:
             break
 
-        # After both groups finish for this problem, submit to verify
-        for group in ["treatment", "nomem"]:
-            pred = extract_diff(p, group)
-            batch_preds[group].append(pred)
+        # After all k runs for this problem, submit to verify per k
+        for k in range(K_RUNS):
+            run_k = k + 1 if K_RUNS > 1 else 0
+            for group in ["treatment", "nomem"]:
+                batch_key = f"{group}_k{run_k}" if run_k > 0 else group
+                if batch_key not in batch_preds:
+                    batch_preds[batch_key] = []
+                pred = extract_diff(p, group, run_k)
+                batch_preds[batch_key].append(pred)
 
         # Submit verify every 5 problems (batch for efficiency)
         if (i + 1) % 5 == 0 or i == len(problems) - 1:
             batch_num = (i + 1) // 5
-            for group in ["treatment", "nomem"]:
-                if batch_preds[group]:
-                    pred_file = VERIFY_DIR / f"preds_{group}_batch{batch_num}.json"
+            for batch_key, preds in list(batch_preds.items()):
+                if preds:
+                    pred_file = VERIFY_DIR / f"preds_{batch_key}_batch{batch_num}.json"
                     with open(pred_file, "w") as f:
-                        json.dump(batch_preds[group], f, indent=2)
-                    verify_queue.put((None, pred_file, f"v5_{group}_b{batch_num}"))
-                    batch_preds[group] = []
+                        json.dump(preds, f, indent=2)
+                    verify_queue.put((None, pred_file, f"pipe_{batch_key}_b{batch_num}"))
+                    batch_preds[batch_key] = []
             log(f"[VERIFY] Submitted batch {batch_num} to verify queue")
 
     # Wait for verify to finish

@@ -216,14 +216,31 @@ def _build_all_items_for_filter(output) -> list[tuple[str, str]]:
 def _apply_llm_relevance_filter(
     output, task_description: str, current_error: str
 ) -> None:
-    """Filter all output sections using LLM relevance judgement (in-place)."""
+    """Filter all output sections using LLM relevance judgement (in-place).
+
+    Repo-specific playbook rules (prefix ``repo-``) bypass the LLM filter
+    and are always kept — they were extracted from successful runs on the
+    same repositories and have high a-priori relevance.
+    """
     items = _build_all_items_for_filter(output)
     if not items:
         return
 
-    logger.info("LLM filter: evaluating %d total items", len(items))
-    kept_ids = _filter_items_with_llm(task_description, current_error, items)
-    kept_set = set(kept_ids)
+    # Separate repo-specific items (always kept) from generic items (filtered)
+    repo_specific_ids = set()
+    filterable_items = []
+    for item_id, text in items:
+        if item_id.startswith("playbook:repo-"):
+            repo_specific_ids.add(item_id)
+        else:
+            filterable_items.append((item_id, text))
+
+    if repo_specific_ids:
+        logger.info("LLM filter: %d repo-specific items bypass filter", len(repo_specific_ids))
+
+    logger.info("LLM filter: evaluating %d filterable items", len(filterable_items))
+    kept_ids = _filter_items_with_llm(task_description, current_error, filterable_items)
+    kept_set = set(kept_ids) | repo_specific_ids
     logger.info(
         "LLM filter: kept %d/%d items (removed %d)",
         len(kept_set), len(items), len(items) - len(kept_set),

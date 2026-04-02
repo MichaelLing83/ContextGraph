@@ -8,10 +8,36 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BASE = Path(os.environ.get("FIFTY_TEST_DIR", "/tmp/swe-bench-test/fifty"))
 
-# OpenCode configs: original uses port 7687 (baseline graph), nomem uses no MCP.
-# These are generated at runtime; see README or opencode.json template in repo root.
+# OpenCode configs generated at runtime to avoid hardcoded paths.
+def _make_treatment_config():
+    """Generate treatment config with REPO_ROOT resolved."""
+    import json as _json
+    cfg = {
+        "$schema": "https://opencode.ai/config.json",
+        "model": "openrouter/openai/gpt-5.4",
+        "provider": {"openrouter": {}},
+        "mcp": {"contextgraph-memory": {
+            "type": "local",
+            "command": ["uv", "run", "--directory", str(REPO_ROOT),
+                        "python", "tools/mcp_server/server.py"],
+            "environment": {
+                "NEO4J_URI": "bolt://localhost:7687",
+                "NEO4J_USER": "neo4j",
+                "NEO4J_PASSWORD": "{env:NEO4J_PASSWORD}",
+                "OPENAI_API_KEY": "{env:OPENAI_API_KEY}",
+                "OPENAI_API_BASE": "{env:OPENAI_API_BASE}",
+                "EMBEDDING_MODEL": "text-embedding-3-large",
+            },
+            "enabled": True, "timeout": 30000,
+        }},
+    }
+    out = BASE / "_generated_treatment_config.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    _json.dump(cfg, open(out, "w"), indent=2)
+    return out
+
 CONFIGS = {
-    "original": REPO_ROOT / "configs" / "opencode_gpt54_original.json",
+    "original": None,  # set in main()
     "nomem": REPO_ROOT / "configs" / "opencode_gpt54_nomem.json",
 }
 
@@ -65,6 +91,7 @@ def run_opencode(problem_id, problem_text, work_dir, group):
 
 def main():
     BASE.mkdir(parents=True, exist_ok=True)
+    CONFIGS["original"] = _make_treatment_config()
 
     # Clone repos
     print("=== Cloning ===")
