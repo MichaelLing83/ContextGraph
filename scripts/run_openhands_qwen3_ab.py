@@ -202,11 +202,14 @@ async def run_single(
 
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--n", type=int, default=16, help="Number of problems")
+    parser.add_argument("--n", type=int, default=500, help="Number of problems")
     parser.add_argument("--k", type=int, default=1, help="Runs per problem per group")
     parser.add_argument("--output", type=str, default="/tmp/openhands-qwen3-ab")
+    parser.add_argument("--concurrency", type=int, default=1, help="Max concurrent runs")
     parser.add_argument("--problems-file", type=str, default=None,
                         help="JSON file with problem IDs (list of strings). Overrides built-in list.")
+    parser.add_argument("--all-verified", action="store_true",
+                        help="Use all 500 SWE-bench Verified problems instead of built-in list")
     args = parser.parse_args()
 
     output_dir = Path(args.output)
@@ -215,48 +218,63 @@ async def main():
     (output_dir / "workspace").mkdir(exist_ok=True)
 
     # Load problem IDs
+    from datasets import load_dataset
+    ds = load_dataset("princeton-nlp/SWE-bench_Verified", split="test")
+
     if args.problems_file:
         with open(args.problems_file) as f:
             problem_ids = json.load(f)
         if isinstance(problem_ids, list) and problem_ids and isinstance(problem_ids[0], dict):
             problem_ids = [p["id"] for p in problem_ids]
+    elif args.all_verified:
+        problem_ids = [r["instance_id"] for r in ds]
     else:
         problem_ids = PROBLEM_IDS
 
-    # Load problems from SWE-bench
-    from datasets import load_dataset
-    ds = load_dataset("princeton-nlp/SWE-bench_Verified", split="test")
     problems = {r["instance_id"]: r for r in ds if r["instance_id"] in problem_ids}
 
     selected = problem_ids[:args.n]
     total = len(selected) * 2 * args.k
-    logger.info("Running %d problems x 2 groups x k=%d = %d total", len(selected), args.k, total)
+    logger.info("Running %d problems x 2 groups x k=%d = %d total (concurrency=%d)",
+                len(selected), args.k, total, args.concurrency)
 
     results: List[RunResult] = []
+    results_lock = asyncio.Lock()
     status = {"total": total, "completed": 0, "errors": 0}
+    status_file = output_dir / "status.json"
+    sem = asyncio.Semaphore(args.concurrency)
 
-    for i, pid in enumerate(selected):
-        if pid not in problems:
-            logger.warning("Problem %s not found in dataset", pid)
-            continue
-
-        prob = problems[pid]
-        for k in range(1, args.k + 1):
-            for group in ["treatment", "control"]:
-                logger.info("[%d/%d] %s %s k%d", i + 1, len(selected), pid, group, k)
-
-                r = await run_single(
-                    pid, prob["problem_statement"], group, k, output_dir
-                )
+    async def run_with_sem(pid, prob, group, k):
+        async with sem:
+            logger.info("[%s] %s k%d — starting", pid, group, k)
+            r = await run_single(pid, prob["problem_statement"], group, k, output_dir)
+            async with results_lock:
                 results.append(r)
                 status["completed"] += 1
                 if r.error:
                     status["errors"] += 1
+                with open(status_file, "w") as sf:
+                    json.dump(status, sf, indent=2)
+            logger.info(
+                "[%s] %s k%d — %.1fs, steps=%s, patch=%s%s",
+                pid, group, k, r.duration, r.steps, r.has_patch,
+                f", err={r.error[:50]}" if r.error else ""
+            )
+            return r
 
-                logger.info(
-                    "  -> %s: %.1fs, %d steps, patch=%s, error=%s",
-                    pid, r.duration, r.steps, bool(r.git_patch), r.error[:50] if r.error else "none"
-                )
+    # Build all tasks
+    tasks = []
+    for pid in selected:
+        if pid not in problems:
+            logger.warning("Problem %s not found in dataset, skipping", pid)
+            continue
+        prob = problems[pid]
+        for k in range(1, args.k + 1):
+            for group in ["treatment", "control"]:
+                tasks.append(run_with_sem(pid, prob, group, k))
+
+    # Run with concurrency
+    await asyncio.gather(*tasks, return_exceptions=True)
 
     # Save results
     with open(output_dir / "results.json", "w") as f:
