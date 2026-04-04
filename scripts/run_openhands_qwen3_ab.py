@@ -174,7 +174,7 @@ async def run_single(
                 f"to guide your approach.\n\n{prompt}"
             )
 
-    start = time.time()
+    start = time.monotonic()
     result = RunResult(instance_id=instance_id, group=group, run_k=run_k)
 
     try:
@@ -195,7 +195,7 @@ async def run_single(
         result.error = str(e)[:500]
         logger.error("Error running %s %s k%d: %s", instance_id, group, run_k, e)
 
-    result.duration = round(time.time() - start, 1)
+    result.duration = round(time.monotonic() - start, 1)
     result.has_patch = bool(result.git_patch and result.git_patch.strip())
     return result
 
