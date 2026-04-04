@@ -259,6 +259,8 @@ If migrating from the old ChatAnywhere-only setup:
 8. **`.env` file** is gitignored — contains API keys
 9. **Sync bundled agent_memory**: After modifying `agent_memory/*.py`, sync to `tools/query_memory/lib/agent_memory/`
 10. **Neo4j data**: Use named Docker volume (`neo4j-contextgraph-data`) for persistence. After rebuild: `python scripts/build_context_graph.py`
+11. **PRs go to wzh4464 repos only** — All PRs must target `wzh4464/*` forks, never upstream repos (e.g., `OpenAutoCoder/live-swe-agent`). Only push to upstream when the user explicitly says so.
+12. **live-SWE-agent**: Submodule at `vendor/live-swe-agent` (fork: `wzh4464/live-swe-agent`). Install: `cd vendor/live-swe-agent && pip install -e .`
 
 ## Remote Server
 
