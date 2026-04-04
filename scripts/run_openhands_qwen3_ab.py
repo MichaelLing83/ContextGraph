@@ -216,7 +216,8 @@ async def main():
 
     # Load problem IDs
     if args.problems_file:
-        problem_ids = json.load(open(args.problems_file))
+        with open(args.problems_file) as f:
+            problem_ids = json.load(f)
         if isinstance(problem_ids, list) and problem_ids and isinstance(problem_ids[0], dict):
             problem_ids = [p["id"] for p in problem_ids]
     else:
@@ -264,8 +265,8 @@ async def main():
         json.dump(status, f, indent=2)
 
     # Summary
-    t_patch = sum(1 for r in results if r.group == "treatment" and r.git_patch)
-    c_patch = sum(1 for r in results if r.group == "control" and r.git_patch)
+    t_patch = sum(1 for r in results if r.group == "treatment" and r.has_patch)
+    c_patch = sum(1 for r in results if r.group == "control" and r.has_patch)
     logger.info(
         "DONE: %d runs, treatment patches=%d, control patches=%d, errors=%d",
         len(results), t_patch, c_patch, status["errors"]
