@@ -55,6 +55,17 @@ try:
     from openhands.core.config.sandbox_config import SandboxConfig
     from openhands.core.main import create_runtime, run_controller
     from openhands.events.action import MessageAction
+
+    # Monkey-patch: force mock function calling for Qwen3-Coder via OpenRouter.
+    # The SDK LLM class has its own native_tool_calling=True default that ignores
+    # LLMConfig.native_tool_calling. We override at the class level.
+    try:
+        from openhands.sdk.llm.llm import LLM as SDKLLM
+        SDKLLM.model_fields["native_tool_calling"].default = False
+        logger.info("Patched SDK LLM: native_tool_calling=False")
+    except Exception as e:
+        logger.warning("Could not patch SDK LLM: %s", e)
+
 except ImportError:
     logger.error(
         "OpenHands not found. Run with Python 3.12 venv:\n"
@@ -69,7 +80,7 @@ MODEL = os.environ.get("OH_MODEL", "openrouter/qwen/qwen3-coder")
 API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 API_BASE = "https://openrouter.ai/api/v1"
 NEO4J_PORT = os.environ.get("NEO4J_PORT", "7690")  # online graph
-MAX_ITERATIONS = int(os.environ.get("OH_MAX_ITER", "30"))
+MAX_ITERATIONS = int(os.environ.get("OH_MAX_ITER", "50"))
 TIMEOUT = int(os.environ.get("OH_TIMEOUT", "600"))
 
 # Problems: use the 16 differential problems from k5 experiment
@@ -134,6 +145,12 @@ def build_config() -> OpenHandsConfig:
         num_retries=3,
         retry_min_wait=5,
         retry_max_wait=30,
+        # Qwen3-Coder via OpenRouter has broken native tool calling:
+        # model puts tool calls inside <think> blocks or omits <tool_call> tags,
+        # and OpenRouter fails to parse them into OpenAI tool_calls format.
+        # Use prompt-based mock function calling instead.
+        native_tool_calling=False,
+        drop_params=True,
     )
     return OpenHandsConfig(
         llms={"llm": llm_config},
