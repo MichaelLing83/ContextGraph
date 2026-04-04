@@ -28,10 +28,10 @@ import logging
 import os
 import sys
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
@@ -55,7 +55,6 @@ try:
     from openhands.core.config.sandbox_config import SandboxConfig
     from openhands.core.main import create_runtime, run_controller
     from openhands.events.action import MessageAction
-    from openhands.events.event import EventSource
 except ImportError:
     logger.error(
         "OpenHands not found. Run with Python 3.12 venv:\n"
@@ -91,7 +90,7 @@ class RunResult:
     instance_id: str
     group: str  # "treatment" or "control"
     run_k: int
-    resolved: Optional[bool] = None
+    has_patch: bool = False  # True if agent produced a non-empty git diff
     steps: int = 0
     duration: float = 0.0
     git_patch: str = ""
@@ -197,6 +196,7 @@ async def run_single(
         logger.error("Error running %s %s k%d: %s", instance_id, group, run_k, e)
 
     result.duration = round(time.time() - start, 1)
+    result.has_patch = bool(result.git_patch and result.git_patch.strip())
     return result
 
 
@@ -205,6 +205,8 @@ async def main():
     parser.add_argument("--n", type=int, default=16, help="Number of problems")
     parser.add_argument("--k", type=int, default=1, help="Runs per problem per group")
     parser.add_argument("--output", type=str, default="/tmp/openhands-qwen3-ab")
+    parser.add_argument("--problems-file", type=str, default=None,
+                        help="JSON file with problem IDs (list of strings). Overrides built-in list.")
     args = parser.parse_args()
 
     output_dir = Path(args.output)
@@ -212,12 +214,20 @@ async def main():
     (output_dir / "trajectories").mkdir(exist_ok=True)
     (output_dir / "workspace").mkdir(exist_ok=True)
 
+    # Load problem IDs
+    if args.problems_file:
+        problem_ids = json.load(open(args.problems_file))
+        if isinstance(problem_ids, list) and problem_ids and isinstance(problem_ids[0], dict):
+            problem_ids = [p["id"] for p in problem_ids]
+    else:
+        problem_ids = PROBLEM_IDS
+
     # Load problems from SWE-bench
     from datasets import load_dataset
     ds = load_dataset("princeton-nlp/SWE-bench_Verified", split="test")
-    problems = {r["instance_id"]: r for r in ds if r["instance_id"] in PROBLEM_IDS}
+    problems = {r["instance_id"]: r for r in ds if r["instance_id"] in problem_ids}
 
-    selected = PROBLEM_IDS[:args.n]
+    selected = problem_ids[:args.n]
     total = len(selected) * 2 * args.k
     logger.info("Running %d problems x 2 groups x k=%d = %d total", len(selected), args.k, total)
 
