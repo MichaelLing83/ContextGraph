@@ -149,12 +149,19 @@ Measure whether a context graph built from past experiences improves agent perfo
 
 ## Infrastructure
 
-### Neo4j
-- **Container**: `neo4j-contextgraph` (image: `neo4j:5`)
-- **Volume**: `neo4j-contextgraph-data` (persistent)
-- **Ports**: 7474 (HTTP), 7687 (Bolt)
-- **Auth**: Set via `NEO4J_AUTH` env var (see `.env`)
-- **Start**: `docker compose up -d neo4j` (or see LiteLLM Proxy below)
+### Neo4j Instances
+
+| Container | Bolt Port | Volume | Purpose | Writable? |
+|-----------|-----------|--------|---------|-----------|
+| `neo4j-contextgraph` | **7687** | `neo4j-contextgraph-data` | **Baseline (READ-ONLY)** — 8,910 PlaybookEntry from 1,795 trajectories. Never modify. | No |
+| `neo4j-contextgraph-enhanced` | 7688 | `neo4j-contextgraph-enhanced` | +7 hand-written strategies (Approach C/D test) | No |
+| `neo4j-contextgraph-repospecs` | 7689 | `neo4j-contextgraph-repospecs` | +25 repo-specific strategies from v3 resolved problems | No |
+| `neo4j-contextgraph-online` | 7690 | `neo4j-contextgraph-online` | Online learning — treatment writes here during experiments | Yes |
+
+- **Auth**: All use `neo4j/contextgraph123`
+- **Baseline (7687) is READ-ONLY**: All experiments that modify the graph must use a copy (7688-7690) or create a new container from the dump at `/tmp/neo4j.dump`
+- **Start all**: `docker compose up -d neo4j` starts only 7687. Others: `docker start neo4j-contextgraph-{enhanced,repospecs,online}`
+- **Create new from baseline**: `docker volume create <name> && docker run --rm -v <name>:/data -v /tmp:/backup neo4j:5 neo4j-admin database load neo4j --from-path=/backup --overwrite-destination`
 
 ### LiteLLM Proxy
 - **Container**: `litellm-proxy` (image: `ghcr.io/berriai/litellm:main-v1.82.3`)
