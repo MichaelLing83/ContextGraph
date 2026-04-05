@@ -36,9 +36,13 @@ if [ "$GROUP" = "treatment" ]; then
     /tmp/mini-swe-venv/bin/python -c "import agent_memory" 2>/dev/null || \
         uv pip install --python /tmp/mini-swe-venv/bin/python -e "${REPO_ROOT}" 2>/dev/null
 
-    # Use custom MemoryAgent that injects context before task
+    # Monkey-patch ProgressTrackingAgent to inject memory, then run swebench
     export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
-    $MINI swebench \
+    /tmp/mini-swe-venv/bin/python -c "
+import sys; sys.argv = sys.argv[1:]
+from scripts.patch_treatment import enable; enable()
+from minisweagent.run.benchmarks.swebench import main; main()
+" -- swebench \
         --subset princeton-nlp/SWE-bench_Verified \
         --split test \
         --config "${CONFIG}" \
@@ -46,7 +50,6 @@ if [ "$GROUP" = "treatment" ]; then
         -c agent.cost_limit=5 \
         -m "${MODEL}" \
         --model-class openrouter_textbased \
-        --agent-class "${REPO_ROOT}/scripts/memory_agent.py:MemoryAgent" \
         --environment-class docker \
         -w "${WORKERS}" \
         -o "${OUTPUT}" \
