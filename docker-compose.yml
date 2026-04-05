@@ -1,11 +1,20 @@
 # docker-compose.yml
-# Runs Neo4j (graph DB) + LiteLLM proxy (API gateway).
+# Runs Neo4j instances + LiteLLM proxy (API gateway).
 #
 # Usage:
-#   docker compose up -d            # Start both services
-#   docker compose up -d neo4j      # Start Neo4j only
-#   docker compose up -d litellm    # Start LiteLLM only
-#   docker compose logs -f litellm  # Follow proxy logs
+#   docker compose up -d                    # Start baseline neo4j + litellm
+#   docker compose up -d neo4j              # Baseline only (READ-ONLY)
+#   docker compose --profile experiment up -d  # Start all neo4j instances
+#   docker compose logs -f litellm          # Follow proxy logs
+#
+# Neo4j instances:
+#   neo4j          (7687) - Baseline, READ-ONLY. 8,910 entries from 1,795 trajectories.
+#   neo4j-online   (7690) - Online learning. Treatment writes strategies here.
+#
+# To create volumes from baseline dump:
+#   docker volume create neo4j-contextgraph-online
+#   docker run --rm -v neo4j-contextgraph-online:/data -v /tmp:/backup neo4j:5 \
+#     neo4j-admin database load neo4j --from-path=/backup --overwrite-destination
 
 services:
   neo4j:
@@ -16,8 +25,23 @@ services:
       - "127.0.0.1:7687:7687"
     environment:
       NEO4J_AUTH: ${NEO4J_AUTH:?Set NEO4J_AUTH in .env (e.g. neo4j/yourpassword)}
+      # READ-ONLY: prevents accidental writes to baseline graph
+      NEO4J_server_databases_default__to__read__only: "true"
     volumes:
       - neo4j-contextgraph-data:/data
+    restart: unless-stopped
+
+  neo4j-online:
+    image: neo4j:5
+    container_name: neo4j-contextgraph-online
+    profiles: ["experiment"]
+    ports:
+      - "127.0.0.1:7477:7474"
+      - "127.0.0.1:7690:7687"
+    environment:
+      NEO4J_AUTH: ${NEO4J_AUTH:?Set NEO4J_AUTH in .env (e.g. neo4j/yourpassword)}
+    volumes:
+      - neo4j-contextgraph-online:/data
     restart: unless-stopped
 
   litellm:
@@ -34,4 +58,6 @@ services:
 
 volumes:
   neo4j-contextgraph-data:
+    external: true
+  neo4j-contextgraph-online:
     external: true
