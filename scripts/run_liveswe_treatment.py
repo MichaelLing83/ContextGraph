@@ -29,5 +29,5 @@ from scripts.patch_treatment import enable
 enable()
 
 # Delegate to mini-extra swebench CLI
-from minisweagent.run.benchmarks.swebench import main
-main()
+from minisweagent.run.benchmarks.swebench import app
+app(standalone_mode=True)
