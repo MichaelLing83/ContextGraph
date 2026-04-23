@@ -1,8 +1,47 @@
-# ContextGraph - Project Guide
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Overview
 
 ContextGraph is a long-term memory system for coding agents. It builds a **context graph** from past SWE-agent trajectories (stored in Neo4j) and provides this memory to agents (SWE-agent, OpenHands) during problem-solving. The goal is to measure whether past experience improves agent performance on new, unseen problems.
+
+## Common Commands
+
+Python runs through the project-local `uv` venv — prefer `uv run …` / `uv pip …` over a bare `python` or `pip`.
+
+```bash
+# Env setup (once)
+uv venv .venv --python 3.12
+uv pip install -e '.[dev]'      # or: uv pip install -e .
+
+# Test
+uv run pytest                                    # full suite
+uv run pytest tests/test_embeddings.py -q        # one file
+uv run pytest -k "retrieval and not slow"       # filter by name
+
+# Neo4j + LiteLLM stack (required before any agent/memory run)
+docker compose up -d                             # starts baseline Neo4j + litellm-proxy
+docker compose down                              # stop (data persists in named volumes)
+
+# Build / refresh the context graph from training trajectories
+uv run python scripts/build_context_graph.py    # nodes + edges
+uv run python scripts/extract_strategies.py
+uv run python scripts/deduplicate_strategies.py
+uv run python scripts/reembed_all_nodes.py --batch-size 64
+
+# Run an A/B experiment (example: SWE-agent on 200 SWE-bench-verified tasks)
+uv run python scripts/run_real_swe_experiment.py --config configs/swe_agent_treatment.yaml
+
+# Re-sync tool bundle after editing agent_memory/ — the SWE-agent tool ships a COPY
+rsync -a --delete agent_memory/ tools/query_memory/lib/agent_memory/
+
+# Refresh / verify the LiteLLM OAuth-style Anthropic key (needed whenever the proxy 401s)
+./scripts/sync_oauth_token.sh
+
+# Export the baseline graph as a flat JSON (no edges, no embeddings) for ablations / sharing
+uv run python scripts/export_nodes_to_json.py --out data/exports/context_graph_nodes.json
+```
 
 ## Project Structure
 
@@ -54,7 +93,8 @@ scripts/                       # Runnable scripts
 ├── analyze_online_learning.py # Analysis with pass^k metrics
 ├── prepare_split.py           # Prepare train/test splits
 ├── collect_swe_agent_results.py
-└── collect_openhands_results.py
+├── collect_openhands_results.py
+└── export_nodes_to_json.py   # Export all Neo4j nodes (no edges, no embeddings) → single JSON
 
 experiments/ab_test/           # A/B experiment framework
 ├── config.py                  # ExperimentConfig, get_config()
@@ -73,6 +113,7 @@ tools/query_memory/            # SWE-agent tool bundle (runs inside Docker conta
 ├── install.sh                 # Installs neo4j driver inside SWE-agent Docker container
 └── lib/agent_memory/          # Bundled agent_memory source for Docker container
 
+data/exports/                  # Flat JSON exports of Neo4j nodes for sharing / ablations (gitignored)
 results/live_experiment/       # All experiment outputs
 ├── verified_200.json          # 200 selected SWE-bench Verified instance IDs (seed=42)
 ├── split.json                 # Test IDs for the 200-problem experiment
@@ -239,15 +280,16 @@ If migrating from the old ChatAnywhere-only setup:
 - **API keys**: In `.env` file (gitignored), see `.env.example` for template
 
 ### Python Environment
-- **Use `uv`** for virtual environment management (user preference)
-- **Python**: >=3.12
+- **Use `uv`** for virtual environment management (never bare `pip`/`python`)
+- **Python**: pyproject declares `requires-python = ">=3.10"`, but dev/target is 3.12
 - **Create**: `uv venv .venv --python 3.12`
 - **Install**: `uv pip install -e '.[dev]'`
+- **Run**: always `uv run <cmd>` so tooling uses the venv interpreter
 
 ### SWE-agent (v1.1.0)
 - **Install**: Clone `https://github.com/SWE-agent/SWE-agent.git` tag v1.1.0, then `uv pip install -e .` (editable mode required)
 - **CLI**: `python -m sweagent run-batch --config <yaml>`
-- **Tool bundle path**: Use **absolute path** in YAML config (`/home/jie/codes/ContextGraph/tools/query_memory`), NOT relative — SWE-agent resolves relative paths from its own install dir
+- **Tool bundle path**: Use **absolute path** in YAML config (e.g. `/Users/zihanwu/Public/codes/ContextGraph/tools/query_memory`). Relative paths resolve against SWE-agent's own install dir, not the project root.
 
 ### OpenHands (v1.3.0+)
 - **Install**: `uv pip install openhands-ai`
@@ -255,19 +297,19 @@ If migrating from the old ChatAnywhere-only setup:
 
 ## Important Gotchas
 
-1. **Never run simulation experiments** — only real agent runs
-2. **Always run SWE-bench verify before analyzing results** — after OpenCode A/B runs complete, extract diffs and run `swebench.harness.run_evaluation` with `--dataset_name princeton-nlp/SWE-bench_Verified` before drawing any conclusions. Raw completion/timeout metrics are not sufficient; only SWE-bench resolved counts are ground truth
-2. **SWE-agent pip install** from PyPI gives wrong package. Always install from GitHub (editable)
-3. **SWE-agent tool bundle paths**: Relative paths resolve from SWE-agent install dir (`~/codes/SWE-agent/`). Always use absolute paths in YAML configs
-4. **Docker required** for both SWE-agent and OpenHands
-5. **Treatment group on Linux**: Add `--add-host=host.docker.internal:host-gateway` to Docker
-6. **SWE-bench testbed Python**: Can be Python 3.6. The `query_memory` bash wrapper forces Python 3.11+ to avoid SyntaxError in neo4j driver. Do NOT use `exec` in the wrapper (kills pexpect session)
-7. **Trajectory format**: Training trajectories use role-based chat format (`role`/`text` fields), NOT standard `.traj`
-8. **`.env` file** is gitignored — contains API keys
-9. **Sync bundled agent_memory**: After modifying `agent_memory/*.py`, sync to `tools/query_memory/lib/agent_memory/`
-10. **Neo4j data**: Use named Docker volume (`neo4j-contextgraph-data`) for persistence. After rebuild: `python scripts/build_context_graph.py`
-11. **PRs go to wzh4464 repos only** — All PRs must target `wzh4464/*` forks, never upstream repos (e.g., `OpenAutoCoder/live-swe-agent`). Only push to upstream when the user explicitly says so.
-12. **live-SWE-agent**: Submodule at `vendor/live-swe-agent` (fork: `wzh4464/live-swe-agent`). Install: `cd vendor/live-swe-agent && pip install -e .`
+1. **Never run simulation experiments** — only real agent runs.
+2. **Always run SWE-bench verify before analyzing results** — after an A/B run completes, extract diffs and run `swebench.harness.run_evaluation` with `--dataset_name princeton-nlp/SWE-bench_Verified`. Raw completion/timeout numbers are not enough; resolved counts from `swebench` are ground truth.
+3. **SWE-agent pip install** from PyPI gives the wrong package. Always install from GitHub, editable.
+4. **SWE-agent tool bundle paths**: SWE-agent resolves relative paths from its own install dir (`~/codes/SWE-agent/`). Always pass absolute paths in YAML configs.
+5. **Docker required** for both SWE-agent and OpenHands runs.
+6. **Treatment group on Linux**: add `--add-host=host.docker.internal:host-gateway` so the container can reach the LiteLLM proxy.
+7. **SWE-bench testbed Python**: can be as old as 3.6. The `tools/query_memory` bash wrapper pins Python 3.11+ to avoid `SyntaxError` in the neo4j driver. Do NOT use `exec` in the wrapper — it kills the pexpect session.
+8. **Trajectory format**: training trajectories use role-based chat format (`role`/`text` fields), NOT the standard `.traj` layout.
+9. **`.env` is gitignored** — holds API keys and the OAuth token for the LiteLLM proxy.
+10. **Sync bundled `agent_memory`**: after modifying `agent_memory/*.py`, mirror the change into `tools/query_memory/lib/agent_memory/` (the SWE-agent tool ships a copy).
+11. **Neo4j volume**: data lives in the `neo4j-contextgraph-data` named volume. After a rebuild, re-run `uv run python scripts/build_context_graph.py`.
+12. **PRs go to `wzh4464` forks only** — never target upstream (`OpenAutoCoder/live-swe-agent`, etc.) unless the user explicitly says so.
+13. **live-SWE-agent**: submodule at `vendor/live-swe-agent` (fork: `wzh4464/live-swe-agent`). Install: `cd vendor/live-swe-agent && uv pip install -e .`
 
 ## Remote Server
 
@@ -291,22 +333,26 @@ If migrating from the old ChatAnywhere-only setup:
 docker compose up -d
 
 # 2. Build context graph (~12 min for 1,795 trajectories)
-python scripts/build_context_graph.py
+uv run python scripts/build_context_graph.py
 
 # 3. Extract strategies + deduplicate + playbook
-python scripts/extract_strategies.py
-python scripts/deduplicate_strategies.py
-python scripts/ingest_playbook.py
+uv run python scripts/extract_strategies.py
+uv run python scripts/deduplicate_strategies.py
+uv run python scripts/ingest_playbook.py
 
 # 4. Re-embed all nodes with text-embedding-3-large (3072 dim)
-python scripts/reembed_all_nodes.py --batch-size 50
+uv run python scripts/reembed_all_nodes.py --batch-size 50
 
 # 5. Run SWE-agent A/B experiment
-python scripts/run_real_swe_experiment.py
+uv run python scripts/run_real_swe_experiment.py
 
 # 6. Run OpenHands A/B experiment
-python scripts/run_real_openhands_experiment.py --n 200
+uv run python scripts/run_real_openhands_experiment.py --n 200
 
 # 7. Analyze results
-python results/live_experiment/run_live_analysis.py
+uv run python results/live_experiment/run_live_analysis.py
 ```
+
+## Auto memory
+
+Persistent session-to-session memory lives under `.claude/projects/-Users-zihanwu-Public-codes-ContextGraph/memory/` with an index at `MEMORY.md`. Read/update the index when you learn something durable about the user, project, or preferred workflows.
