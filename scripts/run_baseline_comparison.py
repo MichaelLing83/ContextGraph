@@ -309,6 +309,115 @@ def analyze():
 
 
 @app.command()
+def verify(
+    methods: Optional[str] = typer.Option(None, help="Comma-separated methods to verify"),
+    max_workers: int = typer.Option(4, help="Parallel workers for evaluation"),
+):
+    """Run SWE-bench verification on all completed experiments."""
+    from swebench.harness.run_evaluation import main as run_evaluation
+
+    all_methods = ["no_memory", "expel", "faiss", "agentkb", "contextgraph"]
+    if methods:
+        all_methods = [m.strip() for m in methods.split(",")]
+
+    typer.echo(f"\n{'='*70}")
+    typer.echo("SWE-bench Verification — Running evaluation harness")
+    typer.echo(f"{'='*70}\n")
+
+    for method in all_methods:
+        preds_file = RESULTS_DIR / method / "output" / "preds.jsonl"
+        if not preds_file.exists():
+            typer.echo(f"  {method:<15} SKIP (no predictions)")
+            continue
+
+        n_preds = sum(1 for _ in open(preds_file))
+        eval_dir = RESULTS_DIR / method / "eval"
+        eval_dir.mkdir(parents=True, exist_ok=True)
+
+        typer.echo(f"\n{'─'*60}")
+        typer.echo(f"  Verifying: {method} ({n_preds} predictions)")
+        typer.echo(f"  Output:    {eval_dir}")
+        typer.echo(f"{'─'*60}")
+
+        cmd = [
+            sys.executable, "-m", "swebench.harness.run_evaluation",
+            "--dataset_name", "princeton-nlp/SWE-bench_Verified",
+            "--predictions_path", str(preds_file),
+            "--max_workers", str(max_workers),
+            "--run_id", f"baseline_{method}",
+            "--output_dir", str(eval_dir),
+        ]
+
+        typer.echo(f"  Command: {' '.join(cmd)}")
+        proc = subprocess.run(
+            cmd,
+            cwd=str(PROJECT_ROOT),
+            capture_output=True,
+            text=True,
+        )
+
+        if proc.returncode != 0:
+            typer.echo(f"  ERROR (exit {proc.returncode}):")
+            typer.echo(proc.stderr[-500:] if proc.stderr else "no stderr")
+        else:
+            typer.echo(f"  Completed successfully")
+
+        # Parse results
+        report_file = eval_dir / f"baseline_{method}.json"
+        if not report_file.exists():
+            # Try alternate location
+            for f in eval_dir.glob("*.json"):
+                report_file = f
+                break
+
+        if report_file.exists():
+            with open(report_file) as f:
+                report = json.load(f)
+            resolved = report.get("resolved", report.get("resolved_ids", []))
+            n_resolved = len(resolved) if isinstance(resolved, list) else resolved
+            typer.echo(f"  Result: {n_resolved}/{n_preds} resolved ({n_resolved/n_preds*100:.1f}%)")
+
+    # Print summary table
+    typer.echo(f"\n\n{'='*70}")
+    typer.echo("VERIFICATION RESULTS SUMMARY")
+    typer.echo(f"{'='*70}")
+    typer.echo(f"{'Method':<15} {'Preds':>6} {'Resolved':>9} {'Rate':>8}")
+    typer.echo("-" * 70)
+
+    summary = {}
+    for method in all_methods:
+        preds_file = RESULTS_DIR / method / "output" / "preds.jsonl"
+        eval_dir = RESULTS_DIR / method / "eval"
+        if not preds_file.exists():
+            continue
+
+        n_preds = sum(1 for _ in open(preds_file))
+        n_resolved = 0
+
+        for f in eval_dir.glob("*.json"):
+            try:
+                with open(f) as fh:
+                    report = json.load(fh)
+                resolved = report.get("resolved", report.get("resolved_ids", []))
+                n_resolved = len(resolved) if isinstance(resolved, list) else resolved
+                break
+            except Exception:
+                continue
+
+        rate = n_resolved / n_preds if n_preds > 0 else 0
+        summary[method] = {"preds": n_preds, "resolved": n_resolved, "rate": rate}
+        typer.echo(f"{method:<15} {n_preds:>6} {n_resolved:>9} {rate*100:>7.1f}%")
+
+    typer.echo("-" * 70)
+
+    # Save
+    output_file = RESULTS_DIR / "verification_results.json"
+    with open(output_file, "w") as f:
+        json.dump(summary, f, indent=2)
+    typer.echo(f"\nResults saved to {output_file}")
+
+
+@app.command()
 def status():
     """Check infrastructure and experiment status."""
     typer.echo("=== Infrastructure Status ===\n")
