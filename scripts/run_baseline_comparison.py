@@ -111,18 +111,24 @@ def _generate_expel_config(rules_file: Path, output: Path, base_config: dict):
         for i, r in enumerate(rules_list[:20])
     )
 
-    system_prompt = f"""\
-You are a helpful assistant that can interact with a computer to solve tasks.
+    system_prompt = (
+        "You are a helpful assistant that can interact with a computer to solve tasks.\n"
+        "\n"
+        "Based on past debugging experiences, here are important rules to follow:\n"
+        f"{rules_text}\n"
+        "\n"
+        "Apply these rules when diagnosing and fixing code issues."
+    )
 
-Based on past debugging experiences, here are important rules to follow:
-{rules_text}
-
-Apply these rules when diagnosing and fixing code issues."""
+    # Indent each line of the system prompt for YAML block scalar
+    indented_prompt = "\n".join(
+        f"      {line}" if line.strip() else ""
+        for line in system_prompt.split("\n")
+    )
 
     control = (CONFIGS_DIR / "swe_agent_control.yaml").read_text()
-    # Replace system_template
     old_system = "    system_template: |-\n      You are a helpful assistant that can interact with a computer to solve tasks."
-    new_system = f"    system_template: |-\n      {system_prompt}"
+    new_system = f"    system_template: |-\n{indented_prompt}"
     content = control.replace(old_system, new_system)
     content = content.replace(
         "per_instance_cost_limit: 0",
