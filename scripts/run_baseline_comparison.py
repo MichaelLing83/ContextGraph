@@ -249,7 +249,10 @@ def analyze():
     results = {}
 
     for method in methods:
-        preds_file = RESULTS_DIR / method / "output" / "preds.jsonl"
+        # SWE-agent v1.1.0 outputs preds.json (dict format)
+        preds_file = RESULTS_DIR / method / "output" / "preds.json"
+        if not preds_file.exists():
+            preds_file = RESULTS_DIR / method / "output" / "preds.jsonl"
         eval_dir = RESULTS_DIR / method / "eval"
 
         if not preds_file.exists():
@@ -258,7 +261,12 @@ def analyze():
 
         # Count predictions
         with open(preds_file) as f:
-            preds = [json.loads(line) for line in f]
+            preds_data = json.load(f)
+        # Handle both dict (v1.1.0) and list formats
+        if isinstance(preds_data, dict):
+            preds = list(preds_data.values())
+        else:
+            preds = preds_data
 
         n_total = len(preds)
         n_with_patch = sum(1 for p in preds if p.get("model_patch", "").strip())
@@ -325,12 +333,18 @@ def verify(
     typer.echo(f"{'='*70}\n")
 
     for method in all_methods:
-        preds_file = RESULTS_DIR / method / "output" / "preds.jsonl"
+        # SWE-agent v1.1.0 outputs preds.json (dict), not preds.jsonl
+        preds_file = RESULTS_DIR / method / "output" / "preds.json"
+        if not preds_file.exists():
+            # Fallback to jsonl format
+            preds_file = RESULTS_DIR / method / "output" / "preds.jsonl"
         if not preds_file.exists():
             typer.echo(f"  {method:<15} SKIP (no predictions)")
             continue
 
-        n_preds = sum(1 for _ in open(preds_file))
+        with open(preds_file) as f:
+            preds_data = json.load(f)
+        n_preds = len(preds_data) if isinstance(preds_data, dict) else len(preds_data)
         eval_dir = RESULTS_DIR / method / "eval"
         eval_dir.mkdir(parents=True, exist_ok=True)
 
@@ -386,12 +400,16 @@ def verify(
 
     summary = {}
     for method in all_methods:
-        preds_file = RESULTS_DIR / method / "output" / "preds.jsonl"
+        preds_file = RESULTS_DIR / method / "output" / "preds.json"
+        if not preds_file.exists():
+            preds_file = RESULTS_DIR / method / "output" / "preds.jsonl"
         eval_dir = RESULTS_DIR / method / "eval"
         if not preds_file.exists():
             continue
 
-        n_preds = sum(1 for _ in open(preds_file))
+        with open(preds_file) as pf:
+            pd = json.load(pf)
+        n_preds = len(pd) if isinstance(pd, dict) else len(pd)
         n_resolved = 0
 
         for f in eval_dir.glob("*.json"):
