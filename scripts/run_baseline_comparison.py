@@ -184,18 +184,17 @@ def run(
     typer.echo(f"Config: {config_path}")
     typer.echo(f"{'='*60}\n")
 
-    # Write instance IDs for SWE-agent
-    ids_file = run_dir / "instance_ids.json"
-    with open(ids_file, "w") as f:
-        json.dump(instance_ids, f)
+    # Build instance filter string for SWE-agent v1.1.0
+    filter_str = "|".join(instance_ids)
 
-    # Build SWE-agent command
+    # Build SWE-agent command (v1.1.0 CLI format)
     cmd = [
         sys.executable, "-m", "sweagent", "run-batch",
         "--config", str(config_path),
-        "--dataset_name", "princeton-nlp/SWE-bench_Verified",
-        "--split", "test",
-        "--instance_ids", str(ids_file),
+        "--instances.type", "swe_bench",
+        "--instances.subset", "verified",
+        "--instances.split", "test",
+        "--instances.filter", filter_str,
         "--output_dir", str(run_dir / "output"),
         "--num_workers", str(n_workers),
     ]
