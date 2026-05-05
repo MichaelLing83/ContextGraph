@@ -359,7 +359,7 @@ def verify(
             "--predictions_path", str(preds_file),
             "--max_workers", str(max_workers),
             "--run_id", f"baseline_{method}",
-            "--output_dir", str(eval_dir),
+            "--report_dir", str(eval_dir),
         ]
 
         typer.echo(f"  Command: {' '.join(cmd)}")
