@@ -55,7 +55,7 @@ def load_subset_ids() -> list[str]:
 def generate_config(method: str, output_path: Path) -> Path:
     """Generate SWE-agent YAML config for the given method."""
     base_config = {
-        "model_name": "openai/claude-sonnet-4-20250514",
+        "model_name": "openai/gpt-5.4",
         "api_base": "http://localhost:4000/v1",
         "cost_limit": COST_LIMIT,
         "max_output_tokens": 8192,
