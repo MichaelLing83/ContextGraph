@@ -6,6 +6,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ContextGraph is a long-term memory system for coding agents. It builds a **context graph** from past SWE-agent trajectories (stored in Neo4j) and provides this memory to agents (SWE-agent, OpenHands) during problem-solving. The goal is to measure whether past experience improves agent performance on new, unseen problems.
 
+### Design Lineage
+
+The architecture draws from four papers — knowing these helps understand why things are built the way they are:
+
+- **HippoRAG** (Gutierrez et al., 2024) — Personalized PageRank over KG for multi-hop associative retrieval (→ PPR channel in `PlaybookRetriever`)
+- **Zep** (Rasmussen et al., 2025) — Episode → Semantic → Community three-layer architecture (→ Fragment → CanonicalRule → Community node hierarchy)
+- **A-MEM** (Xu et al., 2025) — Zettelkasten-based dynamic linking and memory evolution (→ entity resolution, consolidation)
+- **ExpeL** (Zhao et al., 2024) — Experiential learning from success/failure trajectories (→ strategy extraction pipeline)
+
 ## Common Commands
 
 Python runs through the project-local `uv` venv — prefer `uv run …` / `uv pip …` over a bare `python` or `pip`.
@@ -22,6 +31,7 @@ uv run pytest -k "retrieval and not slow"       # filter by name
 
 # Neo4j + LiteLLM stack (required before any agent/memory run)
 docker compose up -d                             # starts baseline Neo4j + litellm-proxy
+docker compose --profile experiment up -d        # also starts online-learning Neo4j (7690)
 docker compose down                              # stop (data persists in named volumes)
 
 # Build / refresh the context graph from training trajectories
@@ -43,85 +53,49 @@ rsync -a --delete agent_memory/ tools/query_memory/lib/agent_memory/
 uv run python scripts/export_nodes_to_json.py --out data/exports/context_graph_nodes.json
 ```
 
-## Project Structure
+## Architecture
+
+### Core Library (`agent_memory/`)
+
+The pip package `agent-memory`. Key entry points:
+
+| Module | Role |
+|---|---|
+| `memory.py` | `AgentMemory` — main facade (learn, query, close) |
+| `models.py` | All data models: Fragment, Strategy, CanonicalRule, PlaybookEntry, etc. |
+| `neo4j_store.py` | Neo4j graph backend (schema, CRUD, graph export for PPR) |
+| `playbook.py` | `PlaybookRetriever` — 3-channel retrieval (cosine + BM25 + PPR) + MMR reranking |
+| `writer.py` | RawTrajectory → graph nodes (fragments, loops, errors) |
+| `strategy_extractor.py` | LLM-based strategy extraction from trajectories |
+| `evaluation/` | Metrics, trajectory parsing, SWE-agent tool integration |
+
+### Retrieval Pipeline (HippoRAG-style)
 
 ```
-agent_memory/                  # Core library (pip package: agent-memory)
-├── memory.py                  # AgentMemory - main entry point (learn, query, close)
-├── models.py                  # Data models: Fragment, Strategy, CanonicalRule, PlaybookEntry, etc.
-├── neo4j_store.py             # Neo4j graph backend (schema, CRUD, graph export for PPR)
-├── playbook.py                # PlaybookRetriever: 3-channel retrieval (cosine + BM25 + PPR) + MMR
-├── retriever.py               # General graph retriever (fragment/error retrieval)
-├── strategy_extractor.py      # LLM-based strategy extraction from trajectories
-├── query_rewriter.py          # LLM query rewriting for better retrieval matching
-├── writer.py                  # RawTrajectory → graph nodes (fragments, loops, errors)
-├── consolidator.py            # Merge similar fragments into methodologies
-├── community.py               # Community detection and summarization
-├── loop_detector.py           # Detect repeated action patterns in trajectories
-├── embeddings.py              # OpenAI embedding wrapper (text-embedding-3-large, 3072 dim)
-├── reranker.py                # Result reranking utilities
-├── formatter.py               # Output formatting for agent consumption
-├── entity_resolver.py         # Entity resolution
-└── evaluation/                # Evaluation framework
-    ├── metrics.py             # ProblemResult, EvaluationMetrics, calculate_metrics()
-    ├── analyzer.py            # compare_results(), ComparisonReport
-    ├── swe_agent_tool.py      # QueryMemoryTool for SWE-agent function calling
-    ├── trajectory_parser.py   # Parse .traj files → RawTrajectory
-    ├── data_splitter.py       # random_split() with seed
-    ├── experiment.py          # OLD simulation experiment - DO NOT USE
-    └── graph_builder.py       # Build graph from trajectories
-
-configs/                       # SWE-agent YAML configs for A/B experiments
-├── swe_agent_control.yaml     # Control: standard SWE-agent (Claude)
-├── swe_agent_treatment.yaml   # Treatment: + QueryMemoryTool (Claude)
-├── swe_agent_treatment_rewriter.yaml  # Treatment + query rewriter
-├── glm47_control.yaml         # Control: GLM-4.7
-└── glm47_treatment.yaml       # Treatment: GLM-4.7 + memory
-
-scripts/                       # Runnable scripts
-├── build_context_graph.py     # Build Neo4j graph from training trajectories
-├── extract_strategies.py      # LLM strategy extraction from trajectories
-├── deduplicate_strategies.py  # Cosine clustering → CanonicalRule nodes + graph linking
-├── ingest_playbook.py         # Create PlaybookEntry nodes
-├── reembed_all_nodes.py       # Re-embed all nodes (text-embedding-3-large, 3072 dim)
-├── extract_anti_patterns.py   # Extract anti-patterns from failures
-├── migrate_schema_v2.py       # Schema migration utilities
-├── run_real_swe_experiment.py # Real SWE-agent A/B runner (200 problems)
-├── run_real_openhands_experiment.py  # Real OpenHands A/B runner
-├── run_rewriter_experiment.py # Rewriter ablation experiment
-├── run_online_learning_experiment.py # Online learning experiment
-├── analyze_online_learning.py # Analysis with pass^k metrics
-├── prepare_split.py           # Prepare train/test splits
-├── collect_swe_agent_results.py
-├── collect_openhands_results.py
-└── export_nodes_to_json.py   # Export all Neo4j nodes (no edges, no embeddings) → single JSON
-
-experiments/ab_test/           # A/B experiment framework
-├── config.py                  # ExperimentConfig, get_config()
-├── graph_builder.py           # AgentMemoryGraph, load_graph()
-├── openhands_integration.py   # MemoryHooks (pre/post action), ExperimentGroup
-├── runner.py                  # Experiment runner
-├── simulator.py               # Simulation runner (NOT real — never use)
-├── analysis.py                # Analysis utilities
-├── collector.py               # Results collector
-└── metrics.py                 # A/B metrics
-
-tools/query_memory/            # SWE-agent tool bundle (runs inside Docker containers)
-├── config.yaml                # Tool definition (function_calling schema)
-├── bin/query_memory           # Bash wrapper — uses Python 3.11+ to avoid testbed Python 3.6
-├── bin/query_memory_impl.py   # Actual Python implementation
-├── install.sh                 # Installs neo4j driver inside SWE-agent Docker container
-└── lib/agent_memory/          # Bundled agent_memory source for Docker container
-
-data/exports/                  # Flat JSON exports of Neo4j nodes for sharing / ablations (gitignored)
-results/live_experiment/       # All experiment outputs
-├── verified_200.json          # 200 selected SWE-bench Verified instance IDs (seed=42)
-├── split.json                 # Test IDs for the 200-problem experiment
-├── graph_build_stats.json     # Stats from context graph building
-└── run_live_analysis.py       # Analysis script with McNemar paired test
-
-tests/                         # pytest test suite
+Query → [error_type extraction] → Seed Nodes (ErrorPattern, Trajectory)
+                                       │
+                    ┌──────────────────┼──────────────────┐
+                    ▼                  ▼                  ▼
+              Channel 1          Channel 2          Channel 3
+            Cosine Search       BM25 Fulltext     PPR Graph Walk
+           (vector index)      (fulltext index)   (damping=0.5)
+                    │                  │                  │
+                    └──────────────────┼──────────────────┘
+                                       ▼
+                              RRF Merge → MMR Rerank → Top-K
 ```
+
+- **PPR (Personalized PageRank)**: From seed nodes, discovers multi-hop associated rules
+- **Node Specificity**: `s_i = 1/degree(i)` — rare error patterns weighted higher
+- **MMR Diversity**: `diversity=0.3` to avoid redundant results
+
+### Other Key Directories
+
+- **`configs/`** — SWE-agent YAML configs for A/B experiments (control vs. treatment, Claude vs. GLM-4.7)
+- **`scripts/`** — Runnable scripts for graph building, strategy extraction, experiment running, analysis
+- **`experiments/ab_test/`** — A/B experiment framework (runner, collector, metrics, OpenHands integration)
+- **`tools/query_memory/`** — SWE-agent tool bundle that runs inside Docker containers; ships a bundled copy of `agent_memory/`
+- **`results/live_experiment/`** — Experiment outputs, 200-problem test set, analysis script with McNemar paired test
 
 ## Neo4j Graph Schema
 
@@ -153,14 +127,6 @@ tests/                         # pytest test suite
 - **Provider**: ChatAnywhere proxy (`https://api.chatanywhere.org/v1`)
 - **All 45,115 nodes** have embeddings
 - **Vector indexes**: One per node label (cosine similarity)
-
-### Retrieval Pipeline (HippoRAG-style)
-The `PlaybookRetriever` uses three channels:
-1. **Cosine**: Vector similarity on `canonical_rule_embedding` index
-2. **BM25**: Fulltext search on `canonical_rule_text` index
-3. **PPR**: Personalized PageRank from seed nodes (ErrorPattern matching query error_type)
-
-Channels are merged via **RRF (Reciprocal Rank Fusion)**, then reranked with **MMR** (diversity=0.3).
 
 ## A/B Experiment Design
 
@@ -201,11 +167,13 @@ Measure whether a context graph built from past experiences improves agent perfo
 
 - **Auth**: All use `neo4j/contextgraph123`
 - **Baseline (7687) is READ-ONLY**: All experiments that modify the graph must use a copy (7688-7690) or create a new container from the dump at `/tmp/neo4j.dump`
-- **Start all**: `docker compose up -d neo4j` starts only 7687. Others: `docker start neo4j-contextgraph-{enhanced,repospecs,online}`
+- **Start baseline + proxy**: `docker compose up -d`
+- **Start with online-learning instance**: `docker compose --profile experiment up -d`
+- **Start standalone containers** (enhanced, repospecs): `docker start neo4j-contextgraph-{enhanced,repospecs}`
 - **Create new from baseline**: `docker volume create <name> && docker run --rm -v <name>:/data -v /tmp:/backup neo4j:5 neo4j-admin database load neo4j --from-path=/backup --overwrite-destination`
 
 ### LiteLLM Proxy
-- **Container**: `litellm-proxy` (image: `ghcr.io/berriai/litellm:main-v1.82.3`)
+- **Container**: `litellm-proxy` (image: `ghcr.io/berriai/litellm:main-stable`)
 - **Port**: 4000 (OpenAI-compatible API)
 - **Config**: `configs/litellm_config.yaml`
 - **Start**: `docker compose up -d` (starts both Neo4j and LiteLLM)
@@ -247,31 +215,10 @@ Measure whether a context graph built from past experiences improves agent perfo
 
 5. **Verify**:
    ```bash
-   # Health check
    curl http://localhost:4000/health
-
-   # Test chat completion
-   curl -s http://localhost:4000/v1/chat/completions \
-     -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
-     -H "Content-Type: application/json" \
-     -d '{"model":"claude-sonnet-4-20250514","messages":[{"role":"user","content":"hi"}],"max_tokens":5}'
-
-   # Test embedding
-   curl -s http://localhost:4000/v1/embeddings \
-     -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
-     -H "Content-Type: application/json" \
-     -d '{"model":"text-embedding-3-large","input":"test"}'
    ```
 
 6. **Web UI**: `http://localhost:4000/ui` (login with master key)
-
-#### Key Migration from Old Setup
-
-If migrating from the old ChatAnywhere-only setup:
-- Old `OPENAI_API_KEY` → rename to `CHATANYWHERE_API_KEY` in `.env`
-- Old `OPENAI_API_BASE` → no longer needed (proxy handles routing)
-- SWE-agent configs now point to `http://localhost:4000/v1` instead of provider URLs
-- Docker containers use `${LITELLM_PROXY_HOST:-host.docker.internal}:4000` to reach the proxy
 
 ### API Providers (via LiteLLM Proxy)
 - **Embeddings**: ChatAnywhere (`https://api.chatanywhere.org`), model `text-embedding-3-large`
@@ -324,7 +271,6 @@ If migrating from the old ChatAnywhere-only setup:
 
 - **Main branch**: `main`
 - **Remote**: GitHub (`wzh4464/ContextGraph`)
-- **Current feature branch**: `feat/playbook-retrieval-improvements`
 
 ## Running the Full Experiment
 
@@ -352,7 +298,3 @@ uv run python scripts/run_real_openhands_experiment.py --n 200
 # 7. Analyze results
 uv run python results/live_experiment/run_live_analysis.py
 ```
-
-## Auto memory
-
-Persistent session-to-session memory lives under `.claude/projects/-Users-zihanwu-Public-codes-ContextGraph/memory/` with an index at `MEMORY.md`. Read/update the index when you learn something durable about the user, project, or preferred workflows.
