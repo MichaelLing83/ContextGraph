@@ -2,35 +2,33 @@
 # Install dependencies for query_memory tool inside the SWE-bench Docker container.
 # This script runs as: cd /root/tools/query_memory && source install.sh
 #
-# IMPORTANT: We ONLY install into the standalone Python 3.11 (installed by SWE-agent).
-# The testbed Python may be as old as 3.6 and cannot run the neo4j driver which
-# requires `from __future__ import annotations` (Python 3.7+).
+# IMPORTANT: Use ONLY the standalone Python 3.11 (installed by SWE-agent).
+# The testbed Python / conda base may be as old as 3.6 and CANNOT install
+# neo4j>=5.0 or run agent_memory code (uses `from __future__ import annotations`).
+#
+# IMPORTANT: Do NOT run pip install here! The pip download/index resolution
+# consumes memory/disk and produces large stderr output that destabilizes the
+# pexpect pty session in resource-constrained containers. Instead, neo4j is
+# pre-bundled in lib/ via requirements.txt wheel files.
 
-# Find a Python 3.11+ interpreter (base conda or standalone)
+# Find the standalone Python 3.11 (SWE-agent always installs it at /root/python3.11)
 PYBIN=""
-for candidate in /opt/miniconda3/bin/python3 /root/python3.11/bin/python3.11; do
-    if [ -x "$candidate" ]; then
-        PYBIN="$candidate"
-        break
-    fi
-done
+if [ -x "/root/python3.11/bin/python3.11" ]; then
+    PYBIN="/root/python3.11/bin/python3.11"
+elif [ -x "/root/python3.11/bin/python3" ]; then
+    PYBIN="/root/python3.11/bin/python3"
+fi
 
 if [ -n "$PYBIN" ]; then
-    # Install neo4j driver into the modern Python
-    "$PYBIN" -m pip install -q "neo4j>=5.0.0" 2>&1 || true
-    echo "Installed neo4j into $PYBIN"
-else
-    echo "WARNING: no Python 3.11+ found, query_memory may not work"
+    # Install neo4j + numpy from bundled wheels (silent, no network)
+    if [ -d "/root/tools/query_memory/lib/wheels" ]; then
+        "$PYBIN" -m pip install -q --no-index --find-links /root/tools/query_memory/lib/wheels "neo4j>=5.0.0" "numpy" 2>/dev/null || true
+    fi
+    # Fallback: install from PyPI if wheels are missing (suppress ALL output to avoid pexpect issues)
+    "$PYBIN" -m pip install -q "neo4j>=5.0.0" "numpy" >/dev/null 2>/dev/null || true
 fi
 
 # Copy agent_memory from host project if available (for development).
 if [ -n "$CONTEXT_GRAPH_ROOT" ] && [ -d "$CONTEXT_GRAPH_ROOT/agent_memory" ]; then
     cp -r "$CONTEXT_GRAPH_ROOT/agent_memory" /root/tools/query_memory/lib/
-    echo "Copied agent_memory from CONTEXT_GRAPH_ROOT"
-elif [ -d "/root/tools/query_memory/lib/agent_memory" ]; then
-    echo "agent_memory already in lib/"
 fi
-
-# NOTE: Do NOT export PYTHONPATH here! The testbed env may use Python 3.6
-# and having agent_memory/neo4j on PYTHONPATH would cause SyntaxError if
-# any tool accidentally imports them. The bash wrapper sets PYTHONPATH locally.

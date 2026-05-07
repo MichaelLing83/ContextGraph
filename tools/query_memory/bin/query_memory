@@ -1,7 +1,7 @@
 #!/bin/bash
-# Wrapper script: always use base conda Python (3.11+) to avoid SyntaxError
-# on old testbed Pythons (<3.7) that can't handle neo4j's annotations.
-# The SWE-bench testbed env may use Python 3.6, but the base conda Python is 3.11+.
+# Wrapper script: ONLY use the standalone Python 3.11 installed by SWE-agent.
+# NEVER use /opt/miniconda3/bin/python3 — it may be Python 3.6 in old testbed
+# containers and will fail with SyntaxError on `from __future__ import annotations`.
 # IMPORTANT: Do NOT use 'exec' — SWE-agent runs this in a pexpect bash session,
 # and exec would replace the shell process, causing EOF when Python exits.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -9,13 +9,15 @@ TOOL_ROOT="$(dirname "$SCRIPT_DIR")"
 
 export PYTHONPATH="$TOOL_ROOT/lib:${PYTHONPATH:-}"
 
-# Try known Python 3.11+ locations (base conda, standalone, system)
-for PYBIN in /opt/miniconda3/bin/python3 /root/python3.11/bin/python3.11; do
+# Use ONLY the standalone Python 3.11 (never conda/testbed Python)
+for PYBIN in /root/python3.11/bin/python3.11 /root/python3.11/bin/python3; do
     if [ -x "$PYBIN" ]; then
         "$PYBIN" "$SCRIPT_DIR/query_memory_impl.py" "$@"
         exit $?
     fi
 done
 
-# Last resort: system python3 (may fail on old testbed envs)
-python3 "$SCRIPT_DIR/query_memory_impl.py" "$@"
+# If standalone Python not found, print error and exit gracefully
+echo "ERROR: standalone Python 3.11 not found at /root/python3.11/" >&2
+echo "RESULT: ERROR - Python 3.11 not available"
+exit 1
