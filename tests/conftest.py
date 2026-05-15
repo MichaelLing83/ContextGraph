@@ -2,6 +2,15 @@
 
 import pytest
 import os
+import sys
+from pathlib import Path
+
+# Make sibling test modules importable as plain `from _http_helpers import …`
+# from any test file under tests/. Pytest doesn't add tests/ to sys.path by
+# default; this is the single owner of that path setup.
+_TESTS_DIR = Path(__file__).resolve().parent
+if str(_TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_TESTS_DIR))
 
 
 @pytest.fixture
