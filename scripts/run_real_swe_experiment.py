@@ -42,7 +42,21 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from dotenv import load_dotenv
+# Ensure the repo root is on sys.path so `scripts.<helper>` imports resolve
+# when this runner is invoked as `python scripts/run_real_swe_experiment.py`.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from dotenv import load_dotenv  # noqa: E402
+
+# Shared helper lives under scripts/ (proper package) so both this runner
+# and the OpenHands runner import the same implementation without either
+# transitively pulling the other's heavy deps.
+from scripts._swebench_eval_results import (  # noqa: E402
+    load_swebench_eval_results as _load_eval_results,
+    summarise_group_resolved_source,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -247,10 +261,17 @@ def parse_traj_file(output_dir: Path, instance_id: str) -> Optional[InstanceResu
         return None
 
     info = data.get("info", {})
-    exit_status = info.get("exit_status", "unknown")
-    model_stats = info.get("model_stats", {})
+    # SWE-agent v1.0 puts exit_status under info; newer/forked builds put it
+    # at the top level. Prefer info first, fall back to the top-level field.
+    exit_status = info.get("exit_status")
+    if exit_status is None:
+        exit_status = data.get("exit_status", "unknown")
+    model_stats = info.get("model_stats") or data.get("model_stats", {})
     trajectory = data.get("trajectory", [])
 
+    # NOTE: this is a coarse heuristic ("agent submitted *something*"), NOT a
+    # ground-truth resolve signal. Use swebench harness eval_results.json for
+    # pass@k reporting — see _compute_metrics().
     success = "submitted" in str(exit_status).lower()
 
     return InstanceResult(
@@ -615,6 +636,8 @@ def run_group_batch(
 def collect_results(
     control_progress: GroupProgress,
     treatment_progress: GroupProgress,
+    control_output_dir: Optional[Path] = None,
+    treatment_output_dir: Optional[Path] = None,
 ) -> dict:
     """Build the output JSON in the format expected by the analysis pipeline.
 
@@ -636,23 +659,71 @@ def collect_results(
         len(control_ids), len(treatment_ids), len(common_ids),
     )
 
-    def _build_problems(progress: GroupProgress, ids: List[str]) -> List[dict]:
+    control_eval = _load_eval_results(control_output_dir)
+    treatment_eval = _load_eval_results(treatment_output_dir)
+    if control_eval is None and control_output_dir is not None:
+        logger.warning(
+            "No SWE-bench eval_results.json found under %s — control pass@k "
+            "will use the 'submitted' heuristic. Run swebench.harness."
+            "run_evaluation before trusting these numbers.",
+            control_output_dir,
+        )
+    if treatment_eval is None and treatment_output_dir is not None:
+        logger.warning(
+            "No SWE-bench eval_results.json found under %s — treatment "
+            "pass@k will use the 'submitted' heuristic. Run "
+            "swebench.harness.run_evaluation before trusting these numbers.",
+            treatment_output_dir,
+        )
+
+    def _build_problems(
+        progress: GroupProgress,
+        ids: List[str],
+        eval_lookup: Optional[Dict[str, bool]],
+    ) -> tuple[List[dict], List[str]]:
         problems = []
+        sources: List[str] = []
         for iid in ids:
             r = progress.completed[iid]
             total_tokens = r.tokens_sent + r.tokens_received
+            if eval_lookup is not None and iid in eval_lookup:
+                resolved = eval_lookup[iid]
+                source = "swebench_eval"
+            else:
+                resolved = r.success
+                source = "heuristic"
+            sources.append(source)
             problems.append({
                 "id": iid,
-                "attempts": [r.success],
+                "attempts": [resolved],
                 "tokens": [total_tokens],
+                "resolved_source": source,
             })
-        return problems
+        return problems, sources
+
+    control_problems, control_sources = _build_problems(
+        control_progress, common_ids, control_eval,
+    )
+    treatment_problems, treatment_sources = _build_problems(
+        treatment_progress, common_ids, treatment_eval,
+    )
+
+    control_summary = summarise_group_resolved_source(control_eval, control_sources)
+    treatment_summary = summarise_group_resolved_source(treatment_eval, treatment_sources)
 
     return {
         "agent": "swe-agent",
         "n_problems": len(common_ids),
-        "control": {"problems": _build_problems(control_progress, common_ids)},
-        "treatment": {"problems": _build_problems(treatment_progress, common_ids)},
+        "resolved_source": {
+            "control": control_summary["label"],
+            "treatment": treatment_summary["label"],
+        },
+        "resolved_source_counts": {
+            "control": control_summary["counts"],
+            "treatment": treatment_summary["counts"],
+        },
+        "control": {"problems": control_problems},
+        "treatment": {"problems": treatment_problems},
     }
 
 
@@ -809,7 +880,12 @@ def main():
         if not treatment_progress.completed:
             treatment_progress = GroupProgress.load(treatment_dir / "progress.json")
 
-        output_data = collect_results(control_progress, treatment_progress)
+        output_data = collect_results(
+            control_progress,
+            treatment_progress,
+            control_output_dir=control_dir,
+            treatment_output_dir=treatment_dir,
+        )
 
         results_file.parent.mkdir(parents=True, exist_ok=True)
         results_file.write_text(json.dumps(output_data, indent=2), encoding="utf-8")

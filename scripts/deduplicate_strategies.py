@@ -9,9 +9,11 @@ Usage:
     python scripts/deduplicate_strategies.py [--dry-run] [--threshold 0.88]
 """
 
+import hashlib
 import os
+import re
 import sys
-import uuid
+import uuid  # noqa: F401  (kept for backwards-compat; deterministic ids now used)
 import argparse
 import logging
 from pathlib import Path
@@ -173,8 +175,16 @@ def create_canonical_rules(
                 centroid = centroid / c_norm
             embedding = centroid.tolist()
 
+        # Deterministic id: stable across runs so re-running dedupe upserts
+        # the same CanonicalRule via MERGE instead of accumulating duplicates.
+        # Hash the canonical rule text + category — same cluster contents
+        # produce the same id every time.
+        rule_key = f"{category}|{representative['rule_text']}".strip()
+        rule_key_norm = re.sub(r"\s+", " ", rule_key).lower()
+        rule_id = "rule_" + hashlib.sha1(rule_key_norm.encode("utf-8")).hexdigest()[:12]
+
         rule = CanonicalRule(
-            id=f"rule_{uuid.uuid4().hex[:12]}",
+            id=rule_id,
             rule_text=representative["rule_text"],
             category=category,
             prefix=prefix,

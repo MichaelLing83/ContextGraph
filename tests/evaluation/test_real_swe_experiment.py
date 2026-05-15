@@ -510,8 +510,10 @@ class TestQueryMemoryBundle:
         assert len(tool_def["arguments"]) == 3
 
     @pytest.mark.skipif(
-        not (REPO_ROOT / "tools" / "query_memory" / "lib").exists(),
-        reason="lib/ is a build artifact created by install.sh, not tracked in git",
+        not (
+            REPO_ROOT / "tools" / "query_memory" / "lib" / "agent_memory" / "__init__.py"
+        ).exists(),
+        reason="bundled agent_memory mirror not present (tracked separately; see #31)",
     )
     def test_lib_has_agent_memory(self):
         lib_dir = self.BUNDLE_DIR / "lib" / "agent_memory"

@@ -9,6 +9,7 @@ then drill down to individual fragments.
 
 from typing import List, Dict, Optional, Set, TYPE_CHECKING
 from collections import Counter, defaultdict
+import os
 import uuid
 import logging
 
@@ -19,6 +20,18 @@ if TYPE_CHECKING:
     from agent_memory.embeddings import EmbeddingClient
 
 logger = logging.getLogger(__name__)
+
+
+def _bootstrap_indexes_enabled() -> bool:
+    """Whether refresh_communities should issue CREATE INDEX statements.
+
+    Schema-modifying queries take a write lock; on a fresh Neo4j we still
+    want the stale-edge sweep to be efficient, so allow opting in via
+    AGENT_MEMORY_BOOTSTRAP_INDEXES=true (or 1/yes). Production should
+    create these indexes once via a migration and leave the env var off.
+    """
+    val = os.environ.get("AGENT_MEMORY_BOOTSTRAP_INDEXES", "").strip().lower()
+    return val in {"1", "true", "yes", "on"}
 
 
 class CommunityDetector:
@@ -141,9 +154,39 @@ class CommunityDetector:
             logger.warning("Community refresh failed; existing communities retained: %s", e)
             return 0
 
-        # Only clear old communities after successful detection
+        # Only clear old communities after successful detection. Detection
+        # writes new community_id values onto Fragment nodes and re-creates
+        # the Community + IN_COMMUNITY edges, but old IN_COMMUNITY edges from
+        # a previous run are not overwritten — MERGE on the new edges is a
+        # no-op for the old ones. Sweep stale edges (those whose endpoint
+        # Community's id no longer matches the Fragment's current
+        # community_id) and then drop orphan Community nodes.
         if count > 0:
             try:
+                # Backing indexes on Fragment.community_id and
+                # Community.community_id are required for the stale-edge
+                # sweep below to avoid a full IN_COMMUNITY scan. Creation
+                # is idempotent (IF NOT EXISTS) but still takes a schema
+                # lock, so we gate it behind an env var — production
+                # deployments should create these once via a migration
+                # script. Set AGENT_MEMORY_BOOTSTRAP_INDEXES=true on the
+                # first refresh after a fresh Neo4j to seed them.
+                if _bootstrap_indexes_enabled():
+                    self.store.execute_write(
+                        "CREATE INDEX fragment_community_id IF NOT EXISTS "
+                        "FOR (f:Fragment) ON (f.community_id)"
+                    )
+                    self.store.execute_write(
+                        "CREATE INDEX community_id IF NOT EXISTS "
+                        "FOR (c:Community) ON (c.community_id)"
+                    )
+                self.store.execute_write(
+                    """
+                    MATCH (f:Fragment)-[r:IN_COMMUNITY]->(c:Community)
+                    WHERE f.community_id IS NULL OR f.community_id <> c.community_id
+                    DELETE r
+                    """
+                )
                 self.store.execute_write(
                     "MATCH (c:Community) WHERE NOT EXISTS { MATCH (:Fragment)-[:IN_COMMUNITY]->(c) } DETACH DELETE c"
                 )
@@ -208,7 +251,42 @@ class CommunityDetector:
             # Cleanup projection
             self.store.execute_write("CALL gds.graph.drop('fragment_graph')")
 
-            return {r["node_id"]: r["community_id"] for r in results}
+            assignments = {r["node_id"]: r["community_id"] for r in results}
+
+            # Persist community_id back onto Fragment nodes — downstream
+            # `_generate_community_summary` and `_write_communities` query by
+            # `f.community_id`, so without this writeback GDS communities are
+            # silently empty. The Python fallback path already writes back at
+            # the end of `_fallback_community_detection`.
+            if assignments:
+                rows = [
+                    {"id": node_id, "cid": cid}
+                    for node_id, cid in assignments.items()
+                ]
+                try:
+                    self.store.execute_write(
+                        """
+                        UNWIND $rows AS row
+                        MATCH (f:Fragment {id: row.id})
+                        SET f.community_id = row.cid
+                        """,
+                        {"rows": rows},
+                    )
+                except Exception as e:
+                    # Writeback failed — return an empty dict instead of the
+                    # in-memory assignments so detect_communities() short-
+                    # circuits and does NOT try to summarize/link communities
+                    # against stale `f.community_id` values. The caller logs
+                    # zero communities created, which is honest.
+                    logger.warning(
+                        "Failed to write GDS community labels (%s); "
+                        "discarding in-memory assignments to keep graph "
+                        "state consistent.",
+                        e,
+                    )
+                    return {}
+
+            return assignments
 
         except Exception as e:
             logger.warning("GDS community detection failed, using fallback: %s", e)

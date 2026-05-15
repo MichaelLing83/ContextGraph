@@ -274,21 +274,35 @@ class PlaybookRetriever:
         else:
             selected = candidates[:top_k]
 
-        # Store RRF score on each entry and filter by minimum threshold
-        filtered = []
+        # Annotate every selected entry with its RRF score, then filter.
         for entry in selected:
             entry._rrf_score = rrf_scores.get(entry.id, 0.0)
-            if entry._rrf_score >= self.MIN_RRF_SCORE:
-                filtered.append(entry)
 
-        if not filtered and selected:
-            # Keep at least the top entry even if below threshold
-            selected[0]._rrf_score = rrf_scores.get(selected[0].id, 0.0)
-            filtered = [selected[0]]
+        # Filter by absolute threshold — but guarantee a minimum result count.
+        # We want to keep as many above-threshold entries as possible (the
+        # noise floor at 0.02 is meaningful when the candidate set is large
+        # enough to contain cross-channel noise), while in low-data regimes
+        # still returning the MMR top_k the caller asked for. Strategy:
+        # take all above-threshold first; then pad with the highest-scoring
+        # below-threshold entries until we hit `min(top_k, len(selected))`.
+        above = [e for e in selected if e._rrf_score >= self.MIN_RRF_SCORE]
+        target = min(top_k, len(selected))
+        if len(above) >= target:
+            filtered = above[:target]
+        else:
+            # When padding under target, prefer the highest-scoring
+            # below-threshold entries; the iteration order of `selected`
+            # comes from MMR which optimizes diversity, not RRF rank.
+            below = sorted(
+                (e for e in selected if e._rrf_score < self.MIN_RRF_SCORE),
+                key=lambda e: e._rrf_score,
+                reverse=True,
+            )
+            filtered = above + below[: target - len(above)]
 
         logger.debug(
-            "RRF threshold %.3f: %d/%d entries passed",
-            self.MIN_RRF_SCORE, len(filtered), len(selected),
+            "RRF threshold %.3f: %d/%d entries passed (returned %d)",
+            self.MIN_RRF_SCORE, len(above), len(selected), len(filtered),
         )
 
         return filtered

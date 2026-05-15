@@ -204,6 +204,17 @@ class Checkpoint:
 _swebench_cache: Optional[Dict[str, Dict]] = None
 
 
+# Eval-results helper is shared with run_real_swe_experiment.py — both
+# import via the `scripts` package (proper package marker added at
+# scripts/__init__.py). This keeps the sweagent import boundary clean:
+# the SWE-agent runner pulls in sweagent at import time, so the OpenHands
+# path must not import it transitively.
+from scripts._swebench_eval_results import (  # noqa: E402
+    load_swebench_eval_results as _load_eval_results_oh,
+    summarise_group_resolved_source,
+)
+
+
 def _load_swebench_verified(dataset_name: str = "princeton-nlp/SWE-bench_Verified") -> Dict[str, Dict]:
     """Load and cache SWE-bench Verified dataset from HuggingFace.
 
@@ -624,9 +635,24 @@ class RealOpenHandsExperiment:
         logger.info("Analyst-format results saved to %s", analyst_file)
 
     def _to_analyst_format(self) -> Dict:
-        """Convert results to the analyst-expected format."""
+        """Convert results to the analyst-expected format.
+
+        Uses SWE-bench harness eval_results.json (if present in the output
+        dir) for ground-truth resolved status. Falls back to the
+        AgentState.FINISHED heuristic and logs a warning otherwise — pass@k
+        derived from the heuristic alone is *not* ground truth.
+        """
         from collections import defaultdict
         from experiments.ab_test.metrics import estimate_tokens
+
+        eval_lookup = _load_eval_results_oh(self.run_config.output_dir)
+        if eval_lookup is None:
+            logger.warning(
+                "No SWE-bench eval_results.json under %s — pass@k will use the "
+                "AgentState.FINISHED heuristic. Run swebench.harness."
+                "run_evaluation before trusting these numbers.",
+                self.run_config.output_dir,
+            )
 
         grouped: Dict[str, Dict[str, List[ProblemResult]]] = {
             "control": defaultdict(list),
@@ -635,19 +661,67 @@ class RealOpenHandsExperiment:
         for r in self.results:
             grouped[r.group][r.instance_id].append(r)
 
+        def _resolved(iid: str, entry: "ProblemResult") -> tuple[bool, str]:
+            if eval_lookup is not None and iid in eval_lookup:
+                return eval_lookup[iid], "swebench_eval"
+            return entry.success, "heuristic"
+
         def _build(entries_by_id):
             out = []
+            # Track per-instance source labels (one per instance, even
+            # though each instance may have multiple attempts). The
+            # shared summarise_group_resolved_source helper aggregates
+            # these into the standard {label, counts} schema.
+            instance_sources: List[str] = []
             for iid, entries in sorted(entries_by_id.items()):
-                attempts = [e.success for e in entries]
+                attempts = []
+                sources = []
+                for e in entries:
+                    resolved, source = _resolved(iid, e)
+                    attempts.append(resolved)
+                    sources.append(source)
                 tokens = [e.total_tokens or estimate_tokens(e.total_steps) for e in entries]
-                out.append({"id": iid, "attempts": attempts, "tokens": tokens})
-            return out
+                # Use the dominant source label for this instance — usually
+                # all attempts have the same source; if they ever differ
+                # it's worth flagging via "mixed" rather than picking one
+                # silently.
+                source_label = sources[0] if len(set(sources)) == 1 else "mixed"
+                instance_sources.append(source_label)
+                out.append({
+                    "id": iid,
+                    "attempts": attempts,
+                    "tokens": tokens,
+                    "resolved_source": source_label,
+                })
+            return out, instance_sources
 
-        control_problems = _build(grouped["control"])
-        treatment_problems = _build(grouped["treatment"])
+        control_problems, control_sources = _build(grouped["control"])
+        treatment_problems, treatment_sources = _build(grouped["treatment"])
+
+        control_summary = summarise_group_resolved_source(
+            eval_lookup, control_sources,
+        )
+        treatment_summary = summarise_group_resolved_source(
+            eval_lookup, treatment_sources,
+        )
+
+        # Matches the schema used by run_real_swe_experiment.collect_results
+        # so downstream consumers can read `resolved_source[group]` uniformly
+        # across SWE-agent and OpenHands result files. The `mixed` count is
+        # mostly OpenHands-specific (an instance whose attempts came from
+        # different sources); SWE-agent's analyst format has one attempt per
+        # instance so its mixed count is always 0.
         return {
             "agent": "openhands",
             "n_problems": len(control_problems) + len(treatment_problems),
+            "resolved_source": {
+                "control": control_summary["label"],
+                "treatment": treatment_summary["label"],
+            },
+            "resolved_source_counts": {
+                "control": control_summary["counts"],
+                "treatment": treatment_summary["counts"],
+            },
             "control": {"problems": control_problems},
             "treatment": {"problems": treatment_problems},
         }
