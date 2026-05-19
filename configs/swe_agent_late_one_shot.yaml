@@ -1,0 +1,171 @@
+# SWE-agent config: TREATMENT with "perceive-then-retrieve" discipline.
+#
+# Round 1-5 of the SWE-bench Pro experiment found that every prompt /
+# content / budget variant of memory either ties or loses to no_memory.
+# Root cause: every variant either (a) burns budget on tool calls that
+# the agent can't decide are useful before exploring, (b) injects
+# misleading guidance from cross-repo memory before the agent has any
+# real perception of the bug, or (c) over-constrains query timing.
+#
+# This config tests the next hypothesis: memory only adds value AFTER
+# the agent has perceived the bug well enough to form a useful query.
+# It enforces one rule — query_memory is forbidden until the first
+# reproduction script has actually run and failed, and is then called
+# exactly once with a structured perception summary (error message,
+# files touched, last command, current hypothesis). After that single
+# call, further memory queries are disallowed.
+#
+# Backwards-compatible with the existing tools/query_memory bundle and
+# the contextgraph_pro_server.py HTTP endpoint — no schema changes.
+# The discipline is encoded entirely in the prompt; the rich query
+# context is packed into the `current_error` field as a structured
+# block the server already tokenizes for retrieval.
+
+agent:
+  type: default
+  model:
+    name: openai/gpt-5.4
+    api_base: http://localhost:4000/v1
+    api_key: $LITELLM_MASTER_KEY
+    per_instance_cost_limit: 0
+    per_instance_call_limit: 75
+    max_output_tokens: 8192
+    top_p: 1.0
+    retry:
+      retries: 3
+      min_wait: 10.0
+      max_wait: 180.0
+
+  templates:
+    system_template: |-
+      You are a helpful assistant that can interact with a computer to solve tasks.
+      You have access to a query_memory tool that retrieves debugging strategies
+      from past problem-solving experiences. This tool is expensive (~5 calls of
+      budget per use) and is most useful AFTER you have evidence of the actual
+      failure mode — not before. Follow the discipline in the user's instructions
+      precisely.
+    instance_template: |-
+      <uploaded_files>
+      {{working_dir}}
+      </uploaded_files>
+      I uploaded a code repository at {{working_dir}}. Consider this PR description:
+
+      <pr_description>
+      {{problem_statement}}
+      </pr_description>
+
+      Please implement the necessary changes so the PR requirements are met. The
+      test files have already been updated; do NOT modify any tests. Make minimal
+      changes to non-test files only.
+
+      ## Memory discipline (HARD CONSTRAINT)
+
+      You have a query_memory tool. There is exactly ONE legal time to call it:
+
+      - **NOT before you have run a reproduction script and observed it fail.**
+        Until then, you do not know enough about the actual bug for memory to
+        return relevant strategies. Any earlier query wastes budget on
+        cross-repo guidance that will mislead you.
+      - **EXACTLY ONCE, immediately after your first reproduction script
+        produces a real failure (a test failing, an exception, an assertion
+        mismatch).** At that moment, you have the maximum signal for the lowest
+        cost.
+      - **NEVER again after that one call.** Subsequent queries return
+        diminishing information and burn budget you need for actual editing.
+
+      When you make that one call, pack the `current_error` field as a
+      structured perception summary so retrieval has the strongest possible
+      signal. Pass it as plain text (NOT a fenced code block — backticks
+      hurt retrieval), one field per line:
+
+      ERROR: <one-line error/exception summary, with key tokens preserved>
+      FILES_TOUCHED: <files you read or edited, comma-separated>
+      LAST_COMMAND: <the command that triggered the failure>
+      HYPOTHESIS: <one sentence on what you currently think is wrong>
+
+      Set `task_description` to a short summary of the PR intent and `phase` to
+      "post_repro_failure".
+
+      Use the returned playbook as advisory hints — apply REPO-SPECIFIC rules
+      literally, treat GENERAL_PATTERN rules as inspiration. Do not transplant
+      code structure from unrelated repos.
+
+      ## Edge cases for the trigger
+
+      - **Initial reproduction passes (no failure observed).** The trigger
+        condition is not met. Do NOT call query_memory. Keep exploring —
+        re-read the PR description, look for the case it describes, and
+        write a more targeted reproduction. The "first repro failure"
+        trigger may fire later in this turn or never; both are fine.
+      - **Flaky reproduction (passes sometimes, fails sometimes).** Treat
+        the first observed failure as the trigger, even if a re-run
+        passes. A flaky symptom is still real signal — your one
+        query_memory call should include "flaky" in the HYPOTHESIS field
+        so retrieval can surface relevant patterns.
+      - **Reproduction script errors out for reasons unrelated to the
+        PR bug** (e.g. import failure because you mis-wrote the script).
+        That is not a real failure — fix the script and try again. Save
+        the one memory query for an actual symptom that matches the PR.
+
+      ## Workflow
+
+      1. Read the PR description and explore the repository to find the code
+         relevant to the change.
+      2. Write a small reproduction for the bug and run it. Use whatever
+         entry point matches this repo's conventions — a standalone Python
+         script invoked with `python <file.py>`, the project's `pytest`
+         invocation, a Go/Node/etc. test runner, or a CLI command pulled
+         from the README. Confirm you see a real failure (a traceback, a
+         test failing, an assertion mismatch — not just a "nothing
+         happens" run).
+      3. **Now** call query_memory with the perception summary above (one
+         call, no more).
+      4. Edit the non-test source files to resolve the issue, guided by the
+         memory results plus your own analysis.
+      5. Rerun the reproduction script and confirm the error is gone.
+      6. Consider edge cases and ensure your fix handles them.
+
+      Your thinking should be thorough; long reasoning is fine.
+    next_step_template: |-
+      OBSERVATION:
+      {{observation}}
+    next_step_no_output_template: |-
+      Your command ran successfully and did not produce any output.
+
+  tools:
+    env_variables:
+      PAGER: cat
+      MANPAGER: cat
+      LESS: -R
+      PIP_PROGRESS_BAR: 'off'
+      TQDM_DISABLE: '1'
+      GIT_PAGER: cat
+      # MEMORY_SERVER_URL points at the contextgraph memory server reachable
+      # from inside the sweagent container. The default below uses
+      # `host.docker.internal`, which:
+      #   - works natively on macOS / Windows Docker Desktop;
+      #   - works on Linux when the sweagent run passes
+      #     `--add-host=host.docker.internal:host-gateway` to docker
+      #     (the bundled run scripts under `scripts/` already do this).
+      # For deployments where neither applies (Kubernetes, plain non-Docker
+      # hosts, or networks that block the gateway alias), edit this line to
+      # point at the actual host:port — e.g. http://172.17.0.1:8013 on Linux
+      # bridge networks without the host-gateway shim, or
+      # http://<remote-host>:<port> for a shared memory server. The tool
+      # layer needs a concrete URL at boot, so the `$VAR` shell-style
+      # interpolation used by `api_key: $LITELLM_MASTER_KEY` above is not
+      # applied here.
+      MEMORY_SERVER_URL: http://host.docker.internal:8013
+    bundles:
+      - path: tools/registry
+      - path: tools/edit_anthropic
+      - path: tools/review_on_submit_m
+      - path: tools/query_memory
+    registry_variables:
+      USE_FILEMAP: 'true'
+    execution_timeout: 180
+    enable_bash_tool: true
+    parse_function:
+      type: function_calling
+
+  history_processors: []
