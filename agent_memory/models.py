@@ -69,6 +69,7 @@ class Fragment:
         "successful_fix",
         "failed_attempt",
         "loop",
+        "section",  # vault: one markdown heading block
     ])
 
     def __post_init__(self):

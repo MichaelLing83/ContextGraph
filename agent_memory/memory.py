@@ -8,6 +8,8 @@ from agent_memory.models import State, Methodology, Fragment, Strategy, ProblemS
 from agent_memory.neo4j_store import Neo4jStore
 from agent_memory.embeddings import get_embedding_client
 from agent_memory.writer import MemoryWriter, RawTrajectory
+from agent_memory.vault.writer import VaultWriter
+from agent_memory.vault.models import RawVaultNote
 from agent_memory.retriever import MemoryRetriever, EnrichedFragment
 from agent_memory.consolidator import MemoryConsolidator
 from agent_memory.loop_detector import LoopDetector, LoopInfo
@@ -142,6 +144,7 @@ class AgentMemory:
         self.writer = MemoryWriter(
             self.store, self.embedder, entity_resolver=self.entity_resolver
         )
+        self.vault_writer = VaultWriter(self.store, self.embedder)
         self.retriever = MemoryRetriever(
             self.store, self.embedder, query_rewriter=self.query_rewriter
         )
@@ -308,6 +311,40 @@ class AgentMemory:
             logger.info(f"Triggering consolidation (every {self._consolidate_every} trajectories)")
             self.consolidator.consolidate()
             # Refresh communities periodically
+            if self._trajectory_count % (self._consolidate_every * 4) == 0:
+                self.community_detector.refresh_communities()
+
+        return traj_id
+
+    def learn_note(self, note: RawVaultNote) -> str:
+        """
+        Learn from one markdown note (Obsidian vault ingestion).
+
+        Same post-write hooks as learn(): community assignment and periodic consolidation.
+        """
+        traj_id = self.vault_writer.write_note(note)
+
+        if self.store and self.community_detector:
+            try:
+                query = """
+                MATCH (t:Trajectory {id: $traj_id})-[:HAS_FRAGMENT]->(f:Fragment)
+                RETURN f.id AS fid
+                """
+                results = self.store.execute_query(query, {"traj_id": traj_id})
+                for r in results:
+                    fid = r.get("fid")
+                    if fid:
+                        self.community_detector.assign_new_node(fid)
+            except Exception as e:
+                logger.debug("Community assignment note: %s", e)
+
+        self._trajectory_count += 1
+        if self._trajectory_count % self._consolidate_every == 0:
+            logger.info(
+                "Triggering consolidation (every %s notes/trajectories)",
+                self._consolidate_every,
+            )
+            self.consolidator.consolidate()
             if self._trajectory_count % (self._consolidate_every * 4) == 0:
                 self.community_detector.refresh_communities()
 
