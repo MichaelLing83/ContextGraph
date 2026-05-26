@@ -2,6 +2,8 @@
 
 A **long-term memory system for coding agents**. Builds a context graph from past SWE-agent trajectories (stored in Neo4j) and retrieves relevant debugging strategies during problem-solving.
 
+**Obsidian vault mode** (no Neo4j): ingest markdown notes into a separate graph vault as `[[wikilinks]]` + `#cg/*` tags, then search and summarize from the CLI. See **[docs/obsidian-vault.md](docs/obsidian-vault.md)**.
+
 ## Design References
 
 1. **HippoRAG** (Gutierrez et al., 2024) — Hippocampal indexing theory for retrieval: Personalized PageRank over KG for multi-hop associative retrieval
@@ -67,6 +69,7 @@ agent_memory/                  # Core library (pip package: agent-memory)
 ├── reranker.py                # Result reranking
 ├── formatter.py               # Output formatting
 ├── entity_resolver.py         # Entity resolution
+├── vault/                     # Obsidian markdown vault graph (wikilinks + tags)
 └── evaluation/                # Evaluation framework
     ├── metrics.py             # ProblemResult, calculate_metrics()
     ├── analyzer.py            # compare_results(), ComparisonReport
@@ -80,6 +83,9 @@ configs/                       # SWE-agent YAML configs
 └── glm47_treatment.yaml       # GLM-4.7 + memory
 
 scripts/                       # Runnable scripts
+├── build_obsidian_graph.py    # Build graph vault from markdown (Obsidian-native)
+├── query_obsidian_vault.py    # Search + --summary over graph vault
+├── build_vault_graph.py       # Ingest markdown into Neo4j (optional)
 ├── build_context_graph.py     # Build Neo4j graph from training trajectories
 ├── extract_strategies.py      # LLM strategy extraction
 ├── deduplicate_strategies.py  # Cosine clustering → CanonicalRule
@@ -157,6 +163,10 @@ python scripts/run_real_swe_experiment.py --group treatment
 | Embeddings | `text-embedding-3-large` (3072 dim) via ChatAnywhere proxy |
 | Python | >=3.12, managed with `uv` |
 | Docker | Required for SWE-agent and OpenHands |
+
+## Documentation
+
+- [Obsidian vault knowledge graph](docs/obsidian-vault.md) — build, search, and summarize from markdown vaults
 
 ## Resources
 
