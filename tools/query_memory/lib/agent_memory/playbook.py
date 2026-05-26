@@ -174,6 +174,11 @@ class PlaybookRetriever:
         top_k: int = 10,
         diversity: float = 0.3,
         error_type: Optional[str] = None,
+        *,
+        use_cosine: bool = True,
+        use_bm25: bool = True,
+        use_ppr: bool = True,
+        use_mmr: bool = True,
     ) -> List[PlaybookEntry]:
         """Three-channel search with RRF merge and MMR diversification.
 
@@ -184,6 +189,17 @@ class PlaybookRetriever:
             diversity: MMR diversity weight (0=pure relevance, 1=max diversity).
                 Clamped to [0.0, 1.0].
             error_type: Error type for PPR seed nodes (e.g. 'ImportError').
+            use_cosine: Include the dense-vector channel in the RRF merge.
+            use_bm25: Include the BM25 fulltext channel in the RRF merge.
+            use_ppr: Include the PPR channel (still gated on `error_type` being
+                non-empty — PPR has no seeds without it).
+            use_mmr: Apply MMR diversity reranking on top of RRF. When False
+                the top-`top_k` candidates by RRF are returned directly.
+
+        Setting all four channel flags to False is degenerate — the function
+        returns an empty list because no candidates are produced. Use this
+        keyword-only API for ablation studies; default behaviour (all True)
+        reproduces the published ContextGraph retriever.
         """
         if not self.store:
             return []
@@ -208,20 +224,30 @@ class PlaybookRetriever:
 
         use_canonical = self._has_canonical_rules()
 
+        cosine_ok = use_cosine and query_embedding is not None
         if use_canonical:
-            cosine_results = self._search_cosine_canonical(
-                query_embedding, k_per_channel
-            ) if query_embedding else []
-            bm25_results = self._search_bm25_canonical(query_text, k_per_channel)
-            ppr_results = self._search_ppr(
-                error_type, query_text, k_per_channel
-            ) if error_type else []
+            cosine_results = (
+                self._search_cosine_canonical(query_embedding, k_per_channel)
+                if cosine_ok else []
+            )
+            bm25_results = (
+                self._search_bm25_canonical(query_text, k_per_channel)
+                if use_bm25 else []
+            )
+            ppr_results = (
+                self._search_ppr(error_type, query_text, k_per_channel)
+                if use_ppr and error_type else []
+            )
         else:
             # Fallback to PlaybookEntry search
-            cosine_results = self._search_cosine(
-                query_embedding, k_per_channel
-            ) if query_embedding else []
-            bm25_results = self._search_bm25(query_text, k_per_channel)
+            cosine_results = (
+                self._search_cosine(query_embedding, k_per_channel)
+                if cosine_ok else []
+            )
+            bm25_results = (
+                self._search_bm25(query_text, k_per_channel)
+                if use_bm25 else []
+            )
             ppr_results = []
 
         # RRF merge all channels
@@ -235,7 +261,7 @@ class PlaybookRetriever:
 
         # Only fetch embeddings when MMR will actually run
         need_embeddings = (
-            query_embedding is not None and diversity > 0
+            use_mmr and query_embedding is not None and diversity > 0
         )
 
         if use_canonical:
@@ -278,13 +304,27 @@ class PlaybookRetriever:
         for entry in selected:
             entry._rrf_score = rrf_scores.get(entry.id, 0.0)
 
-        # Filter by absolute threshold — but never drop below top_k results.
-        # In low-data regimes the over-fetched pool is small enough that MMR
-        # already returned what the caller asked for; the noise floor at 0.02
-        # is only meaningful when the candidate set is large enough to contain
-        # cross-channel noise.
+        # Filter by absolute threshold — but guarantee a minimum result count.
+        # We want to keep as many above-threshold entries as possible (the
+        # noise floor at 0.02 is meaningful when the candidate set is large
+        # enough to contain cross-channel noise), while in low-data regimes
+        # still returning the MMR top_k the caller asked for. Strategy:
+        # take all above-threshold first; then pad with the highest-scoring
+        # below-threshold entries until we hit `min(top_k, len(selected))`.
         above = [e for e in selected if e._rrf_score >= self.MIN_RRF_SCORE]
-        filtered = above if len(above) >= min(top_k, len(selected)) else selected[:top_k]
+        target = min(top_k, len(selected))
+        if len(above) >= target:
+            filtered = above[:target]
+        else:
+            # When padding under target, prefer the highest-scoring
+            # below-threshold entries; the iteration order of `selected`
+            # comes from MMR which optimizes diversity, not RRF rank.
+            below = sorted(
+                (e for e in selected if e._rrf_score < self.MIN_RRF_SCORE),
+                key=lambda e: e._rrf_score,
+                reverse=True,
+            )
+            filtered = above + below[: target - len(above)]
 
         logger.debug(
             "RRF threshold %.3f: %d/%d entries passed (returned %d)",

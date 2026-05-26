@@ -61,6 +61,12 @@ class MemoryQueryRequest(BaseModel):
     phase: Optional[str] = None
     repo: Optional[str] = None
     instance_id: Optional[str] = None
+    # Ablation knobs — defaults match the published ContextGraph retriever
+    # (cosine + BM25 + PPR + MMR). Set any to False to ablate that channel.
+    use_cosine: bool = True
+    use_bm25: bool = True
+    use_ppr: bool = True
+    use_mmr: bool = True
 
 
 class MemoryQueryResponse(BaseModel):
@@ -96,7 +102,48 @@ class MemoryItemsResponse(BaseModel):
     repo: Optional[str] = None
 
 
+# Conservative cap on `/ingest_strategy` payload text. The embedding model
+# (text-embedding-3-large) takes 8192 tokens / ~32 KB; we cap at ~16 KB
+# of UTF-8 text so a single rogue request can't pin the embedding pool
+# or dump multi-MB blobs into PlaybookEntry.text. Overridable per server.
+INGEST_TEXT_MAX_CHARS = int(os.environ.get("INGEST_TEXT_MAX_CHARS", "16384"))
+
+
+class IngestStrategyRequest(BaseModel):
+    """Payload for /ingest_strategy.
+
+    Adding a new PlaybookEntry at runtime. `text` is required and trimmed;
+    empty values are rejected with a 422 by FastAPI's Pydantic layer.
+    Server-side length cap (INGEST_TEXT_MAX_CHARS) is enforced in the
+    handler so callers get a structured `ok=False` response rather than a
+    500 from a downstream embedder OOM.
+    """
+    text: str
+    repo: Optional[str] = None
+    prefix: Optional[str] = None
+    section: Optional[str] = None
+    id: Optional[str] = None
+
+
+class IngestStrategyResponse(BaseModel):
+    ok: bool
+    id: Optional[str] = None
+    len_text: Optional[int] = None
+    embedding_dim: Optional[int] = None
+    repo: Optional[str] = None
+    section: Optional[str] = None
+    error: Optional[str] = None
+
+
 _REPO_PREFIX_RE = re.compile(r"^\s*\[([^\]]+)\]")
+
+# Caller-supplied PlaybookEntry IDs must look like `<prefix>-<token>` with
+# safe characters only. This guards /ingest_strategy from accidental
+# collisions with reserved IDs and from injection-shaped values appearing
+# in downstream logs / Cypher queries (entry IDs flow into the graph as
+# property values, not as identifiers — but a defensive narrow allowlist
+# is cheap and removes a class of "weird input" concerns).
+_INGEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
 
 def _build_query_text(request: MemoryQueryRequest) -> str:
@@ -379,6 +426,10 @@ def create_app(k_in: int, k_out: int) -> FastAPI:
         else:
             in_entries = memory.playbook_retriever.retrieve(
                 query_text, query_embedding=embedding, top_k=k_in + k_out,
+                use_cosine=request.use_cosine,
+                use_bm25=request.use_bm25,
+                use_ppr=request.use_ppr,
+                use_mmr=request.use_mmr,
             )
             out_entries = []
 
@@ -387,6 +438,68 @@ def create_app(k_in: int, k_out: int) -> FastAPI:
             playbook=playbook,
             num_entries=len(in_entries) + len(out_entries),
             repo=repo,
+        )
+
+    @app.post("/ingest_strategy", response_model=IngestStrategyResponse)
+    def ingest_strategy(request: IngestStrategyRequest):
+        """Append a new PlaybookEntry to the graph at runtime.
+
+        The text is embedded with the configured embedding model and stored
+        as a new :PlaybookEntry node. If ``repo`` is supplied and the text
+        does not already begin with a bracketed ``[org/repo]`` tag, one is
+        prepended so the retriever's repo-aware bucket sees the entry.
+        Returns the assigned id + token counts.
+
+        Designed for SWE-ContextBench-style "context learning": the runner
+        calls this after each instance finishes, so subsequent instances
+        can retrieve the strategy.
+        """
+        import time as _time
+        import uuid as _uuid
+
+        text = (request.text or "").strip()
+        if not text:
+            return IngestStrategyResponse(ok=False, error="empty text")
+        if len(text) > INGEST_TEXT_MAX_CHARS:
+            return IngestStrategyResponse(
+                ok=False,
+                error=f"text length {len(text)} exceeds INGEST_TEXT_MAX_CHARS={INGEST_TEXT_MAX_CHARS}",
+            )
+        repo = request.repo or None
+        prefix = request.prefix or "psw"
+        section = request.section or ("REPO_SPECIFIC" if repo else "GENERAL_PATTERN")
+        if repo and not text.startswith("[") and "/" in repo:
+            text = f"[{repo}] {text}"
+        if request.id is not None:
+            if not _INGEST_ID_RE.match(request.id):
+                return IngestStrategyResponse(
+                    ok=False,
+                    error="id must match ^[A-Za-z0-9._-]{1,128}$",
+                )
+            existing = store.execute_query(
+                "MATCH (p:PlaybookEntry {id: $id}) RETURN 1 AS hit LIMIT 1",
+                {"id": request.id},
+            )
+            if existing:
+                return IngestStrategyResponse(
+                    ok=False, error=f"id already exists: {request.id}",
+                )
+            pid = request.id
+        else:
+            pid = f"online-{prefix}-{int(_time.time())}-{_uuid.uuid4().hex[:8]}"
+
+        # Embed
+        emb = memory.playbook_retriever.embedder.embed(text)
+
+        # Build & store entry
+        from agent_memory.models import PlaybookEntry
+        entry = PlaybookEntry(id=pid, prefix=prefix, section=section,
+                              text=text, embedding=emb)
+        store.batch_create_playbook_entries([entry])
+        return IngestStrategyResponse(
+            ok=True, id=pid, len_text=len(text),
+            embedding_dim=len(emb) if emb else 0,
+            repo=repo, section=section,
         )
 
     @app.post("/query_memory_items", response_model=MemoryItemsResponse)
@@ -424,6 +537,10 @@ def create_app(k_in: int, k_out: int) -> FastAPI:
             # design".
             fallback = memory.playbook_retriever.retrieve(
                 query_text, query_embedding=embedding, top_k=k_in + k_out,
+                use_cosine=request.use_cosine,
+                use_bm25=request.use_bm25,
+                use_ppr=request.use_ppr,
+                use_mmr=request.use_mmr,
             )
             items.extend(_entries_to_items(
                 [(entry, None) for entry in fallback], "OTHERS",

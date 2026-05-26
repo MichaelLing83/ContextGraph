@@ -278,6 +278,123 @@ class TestPlaybookRetriever:
         assert "d" in ids
 
 
+class TestPlaybookRetrieveChannels:
+    """Ablation knobs on PlaybookRetriever.retrieve().
+
+    Each test wires its own ``execute_query.side_effect`` list because the
+    sequence of underlying Cypher queries differs by ablation mode:
+
+    1. ``_has_canonical_rules()`` check — always fires
+    2. ``_search_cosine()`` — only when ``use_cosine`` is True
+    3. ``_search_bm25()`` — only when ``use_bm25`` is True
+    4. ``_fetch_entries_with_embeddings()`` (MMR on) or
+       ``_fetch_entries_by_ids()`` (MMR off) — fetches the surviving candidates
+    """
+
+    def test_disable_cosine_channel_skips_vector_query(self):
+        """use_cosine=False removes the cosine query from the call sequence."""
+        bm25_hits = [{"id": "a", "score": 3.0}, {"id": "b", "score": 2.0}]
+        mock_store = MagicMock()
+        mock_embedder = MagicMock()
+        mock_embedder.embed.return_value = [0.1, 0.2]
+        mock_store.execute_query.side_effect = [
+            [{"cnt": 0}],   # _has_canonical_rules
+            bm25_hits,       # _search_bm25
+            [{"id": "a", "prefix": "shr",
+              "section": "STRATEGIES AND HARD RULES",
+              "text": "a rule", "embedding": [0.5, 0.5]},
+             {"id": "b", "prefix": "shr",
+              "section": "STRATEGIES AND HARD RULES",
+              "text": "b rule", "embedding": [0.5, 0.5]}],
+        ]
+
+        retriever = PlaybookRetriever(store=mock_store, embedder=mock_embedder)
+        results = retriever.retrieve("import error", top_k=2, use_cosine=False)
+
+        assert {r.id for r in results} == {"a", "b"}
+        # Sanity: only three execute_query calls (no cosine, no PPR)
+        assert mock_store.execute_query.call_count == 3
+
+    def test_disable_bm25_channel_skips_fulltext_query(self):
+        """use_bm25=False removes the BM25 query from the call sequence."""
+        cosine_hits = [{"id": "a", "score": 0.95}, {"id": "b", "score": 0.80}]
+        mock_store = MagicMock()
+        mock_embedder = MagicMock()
+        mock_embedder.embed.return_value = [0.1, 0.2]
+        mock_store.execute_query.side_effect = [
+            [{"cnt": 0}],
+            cosine_hits,
+            [{"id": "a", "prefix": "shr",
+              "section": "STRATEGIES AND HARD RULES",
+              "text": "a rule", "embedding": [0.5, 0.5]},
+             {"id": "b", "prefix": "shr",
+              "section": "STRATEGIES AND HARD RULES",
+              "text": "b rule", "embedding": [0.5, 0.5]}],
+        ]
+
+        retriever = PlaybookRetriever(store=mock_store, embedder=mock_embedder)
+        results = retriever.retrieve("import error", top_k=2, use_bm25=False)
+
+        assert {r.id for r in results} == {"a", "b"}
+        assert mock_store.execute_query.call_count == 3
+
+    def test_disable_mmr_fetches_plain_entries(self):
+        """use_mmr=False skips the embedding fetch and uses plain rows."""
+        mock_store = MagicMock()
+        mock_embedder = MagicMock()
+        mock_embedder.embed.return_value = [0.1, 0.2]
+        mock_store.execute_query.side_effect = [
+            [{"cnt": 0}],
+            [{"id": "a", "score": 0.95}],
+            [{"id": "a", "score": 3.0}],
+            # Plain fetch — no embedding column required, retriever's
+            # `_fetch_entries_by_ids` returns the row dict directly.
+            [{"id": "a", "prefix": "shr",
+              "section": "STRATEGIES AND HARD RULES",
+              "text": "a rule"}],
+        ]
+
+        retriever = PlaybookRetriever(store=mock_store, embedder=mock_embedder)
+        results = retriever.retrieve("import error", top_k=1, use_mmr=False)
+
+        assert len(results) == 1
+        assert results[0].id == "a"
+
+    def test_disable_all_channels_returns_empty(self):
+        """Degenerate config: no channels enabled, nothing to merge."""
+        mock_store = MagicMock()
+        mock_embedder = MagicMock()
+        mock_embedder.embed.return_value = [0.1, 0.2]
+        mock_store.execute_query.side_effect = [[{"cnt": 0}]]
+
+        retriever = PlaybookRetriever(store=mock_store, embedder=mock_embedder)
+        results = retriever.retrieve(
+            "import error", top_k=5,
+            use_cosine=False, use_bm25=False, use_ppr=False,
+        )
+
+        assert results == []
+        # Only the canonical-rules check fires; no channel queries, no fetch.
+        assert mock_store.execute_query.call_count == 1
+
+    def test_default_kwargs_preserve_existing_behaviour(self):
+        """All four flags default to True — existing call sites unchanged."""
+        mock_store = MagicMock()
+        mock_embedder = MagicMock()
+        mock_embedder.embed.return_value = [0.1, 0.2]
+        mock_store.execute_query.side_effect = [
+            [{"cnt": 0}],
+            [{"id": "a", "score": 0.95}],
+            [{"id": "a", "score": 3.0}],
+            [{"id": "a", "prefix": "shr",
+              "section": "STRATEGIES AND HARD RULES",
+              "text": "a rule", "embedding": [0.5, 0.5]}],
+        ]
+        retriever = PlaybookRetriever(store=mock_store, embedder=mock_embedder)
+        results = retriever.retrieve("import error", top_k=1)
+        assert len(results) == 1
+
+
 class TestStrategiesToPlaybookEntries:
     """Tests for strategies_to_playbook_entries converter."""
 
