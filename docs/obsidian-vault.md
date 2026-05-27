@@ -53,9 +53,42 @@ Options:
 | `--link-mode symlink` | `Sources/` → symlink to source vault; links like `[[Sources/Projects/Note]]` |
 | `--link-mode frontmatter` | Paths only in YAML, no source wikilinks in the graph |
 | `--max-notes N` | Ingest only the first N files (testing) |
+| `--chunk-mode heading` | One fragment per markdown heading (default) |
+| `--chunk-mode chapter` | One fragment per source note |
+| `--chunk-mode adaptive` | Greedy merge by `--fragment-chars`; short notes stay whole |
+| `--fragment-chars 500` | Target size for `adaptive` mode (default 500) |
+| `--fragment-max-chars 3000` | Cap per fragment; longer pieces split on `\\n\\n` paragraphs (default 3000; `0`=off) |
 | `--vault PATH` | Legacy: single vault, writes under `ContextGraph/` subfolder |
 
-After build, check `MyNotesGraph/MOC.md` and `build_report.json`.
+### Adaptive chunking (`--chunk-mode adaptive`)
+
+Uses **plain text length** after stripping markup:
+
+1. If the whole note ≤ `fragment-chars` → **one** fragment (entire chapter).
+2. Otherwise split into small units (per `##` block, or per paragraph if no headings).
+3. **Greedily merge** adjacent units while the combined size ≤ `fragment-chars`.
+4. A single unit larger than the limit is kept **whole** (no truncation).
+
+All source text is represented across fragments; nothing is dropped from the graph build.
+
+After adaptive/heading merge, any fragment still above `--fragment-max-chars` is split again by blank-line paragraphs (e.g. `Title (1/3)`, `Title (2/3)`). A single paragraph above the cap is kept whole.
+
+### Markup in fragments (default: preserved)
+
+By default, fragment bodies keep **markdown as in the source** (fenced code blocks, `[links](url)`, etc.). This is required for technical docs (TOML/YAML examples, API links).
+
+Use `--strip-markup` only if you want the old lightweight mode (no code blocks, links reduced to plain text).
+
+```bash
+uv run python scripts/build_obsidian_graph.py \
+  --source-vault ~/Vaults/MyNotes \
+  --graph-vault ~/Vaults/BooksGraph \
+  --glob "Books/**/*.md" \
+  --chunk-mode adaptive \
+  --fragment-chars 500
+```
+
+After build, check `MyNotesGraph/MOC.md` and `build_report.json` (includes `graph_stats`: fragment count, body length min/mean/median/max, wikilink edge counts). The CLI also prints a short summary to the terminal.
 
 ## 2. Search
 

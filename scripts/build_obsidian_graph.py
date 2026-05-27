@@ -28,6 +28,10 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from agent_memory.vault import iter_vault_notes
+from agent_memory.vault.graph_stats import (
+    compute_graph_vault_stats,
+    format_graph_stats,
+)
 from agent_memory.vault.obsidian_graph import (
     DEFAULT_GRAPH_DIR,
     ObsidianGraphBuilder,
@@ -69,6 +73,29 @@ def main() -> None:
     )
     parser.add_argument("--max-notes", type=int, default=0)
     parser.add_argument("--glob", default="**/*.md")
+    parser.add_argument(
+        "--chunk-mode",
+        choices=("heading", "adaptive", "chapter"),
+        default="heading",
+        help="Fragment granularity: heading (per ##), adaptive (greedy target size), chapter (one per note)",
+    )
+    parser.add_argument(
+        "--fragment-chars",
+        type=int,
+        default=500,
+        help="Target max plain-text chars per fragment when --chunk-mode=adaptive (default: 500)",
+    )
+    parser.add_argument(
+        "--fragment-max-chars",
+        type=int,
+        default=3000,
+        help="Hard cap: split longer fragments by markdown paragraphs (default: 3000, 0=off)",
+    )
+    parser.add_argument(
+        "--strip-markup",
+        action="store_true",
+        help="Strip code blocks and links to plain text (legacy lightweight mode)",
+    )
     args = parser.parse_args()
 
     if args.vault and not args.source_vault:
@@ -96,6 +123,10 @@ def main() -> None:
         source_vault=source_vault,
         graph_dir=graph_dir,
         link_mode=args.link_mode,
+        chunk_mode=args.chunk_mode,
+        fragment_chars=args.fragment_chars,
+        fragment_max_chars=args.fragment_max_chars,
+        preserve_markup=not args.strip_markup,
     )
     builder.load_registry()
     builder.setup_cross_vault_links()
@@ -115,19 +146,31 @@ def main() -> None:
     moc = builder.write_moc()
     builder.save_registry()
 
+    graph_stats = compute_graph_vault_stats(
+        graph_vault, graph_root=builder.graph_root
+    )
+
     report = {
         "source_vault": str(source_vault),
         "graph_vault": str(graph_vault),
         "separate_vaults": builder.separate_vaults,
         "link_mode": args.link_mode,
+        "chunk_mode": args.chunk_mode,
+        "fragment_chars": args.fragment_chars,
+        "fragment_max_chars": args.fragment_max_chars,
+        "preserve_markup": not args.strip_markup,
         "notes_ingested": ingested,
         "errors": errors[:20],
         "moc": str(moc.relative_to(graph_vault)),
         "elapsed_sec": round(time.time() - start, 2),
+        "graph_stats": graph_stats.to_dict(),
     }
     out = builder.graph_root / "build_report.json"
     out.write_text(json.dumps(report, indent=2), encoding="utf-8")
-    logger.info("Done: %s", report)
+    logger.info("Build finished in %.1fs — %d source notes ingested", report["elapsed_sec"], ingested)
+    print(format_graph_stats(graph_stats))
+    if errors:
+        logger.warning("%d ingest errors (see build_report.json)", len(errors))
 
 
 if __name__ == "__main__":

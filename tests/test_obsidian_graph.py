@@ -5,7 +5,11 @@ from pathlib import Path
 from agent_memory.vault.obsidian_graph import ObsidianGraphBuilder
 from agent_memory.vault.obsidian_index import ObsidianVaultIndex
 from agent_memory.vault.parser import parse_vault_note
-from agent_memory.vault.wikilinks import extract_wikilinks, wikilink_for_path
+from agent_memory.vault.wikilinks import (
+    extract_wikilinks,
+    source_rel_to_stub_stem,
+    wikilink_for_path,
+)
 
 
 def test_wikilink_extraction():
@@ -98,3 +102,17 @@ def test_build_graph_separate_vaults(tmp_path: Path):
 def test_wikilink_for_path():
     assert wikilink_for_path("a/b.md") == "[[a/b]]"
     assert wikilink_for_path("a/b.md", "H") == "[[a/b#H]]"
+
+
+def test_source_stub_stem_no_double_md():
+    assert source_rel_to_stub_stem("docs/concepts/cache.md") == "docs--concepts--cache"
+
+
+def test_wikilink_short_same_folder():
+    assert (
+        wikilink_for_path(
+            "Fragments/cache--Caching.md",
+            from_rel="Fragments/cache--Dependency caching.md",
+        )
+        == "[[cache--Caching]]"
+    )

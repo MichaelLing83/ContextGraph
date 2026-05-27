@@ -17,19 +17,23 @@ def strip_frontmatter(text: str) -> str:
     return _FRONTMATTER_RE.sub("", text, count=1).lstrip()
 
 
-def markdown_to_plain_text(text: str, *, strip_fm: bool = True) -> str:
-    """Keep readable text; drop fenced code blocks and most markup."""
+def markdown_to_plain_text(
+    text: str,
+    *,
+    strip_fm: bool = True,
+    keep_code_blocks: bool = False,
+) -> str:
+    """Strip markup for search/plain views. By default removes fenced code blocks."""
     if strip_fm:
         text = strip_frontmatter(text)
-    # Remove fenced code blocks (content omitted for embedding focus)
-    text = re.sub(r"```[\s\S]*?```", "\n", text)
+    if not keep_code_blocks:
+        text = re.sub(r"```[\s\S]*?```", "\n", text)
     text = re.sub(r"`([^`]+)`", r"\1", text)
     # Wikilinks: [[target|alias]] -> alias or target
     text = re.sub(r"\[\[([^\]|]+)\|([^\]]+)\]\]", r"\2", text)
     text = re.sub(r"\[\[([^\]]+)\]\]", r"\1", text)
-    # Images and links
+    # Images: alt text only; links: keep markdown link syntax
     text = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", text)
-    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
     # Headings / emphasis
     text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
     text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)

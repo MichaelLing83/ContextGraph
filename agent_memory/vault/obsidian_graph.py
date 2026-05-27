@@ -10,8 +10,12 @@ from pathlib import Path
 from typing import List, Literal, Optional
 
 from agent_memory.vault.models import RawVaultNote
-from agent_memory.vault.segmenter import segment_note
-from agent_memory.vault.wikilinks import note_title_to_filename, wikilink_for_path
+from agent_memory.vault.segmenter import ChunkMode, segment_note
+from agent_memory.vault.wikilinks import (
+    note_title_to_filename,
+    source_rel_to_stub_stem,
+    wikilink_for_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,11 +47,19 @@ class ObsidianGraphBuilder:
         source_vault: Optional[Path] = None,
         graph_dir: str = "",
         link_mode: LinkMode = "stub",
+        chunk_mode: ChunkMode = "heading",
+        fragment_chars: int = 500,
+        fragment_max_chars: int = 3000,
+        preserve_markup: bool = True,
     ):
         self.graph_vault = graph_vault.resolve()
         self.source_vault = (source_vault or graph_vault).resolve()
         self.separate_vaults = self.source_vault != self.graph_vault
         self.link_mode = link_mode
+        self.chunk_mode = chunk_mode
+        self.fragment_chars = fragment_chars
+        self.fragment_max_chars = fragment_max_chars
+        self.preserve_markup = preserve_markup
 
         if graph_dir:
             self.graph_root = self.graph_vault / graph_dir
@@ -64,6 +76,9 @@ class ObsidianGraphBuilder:
             "graph_vault": str(self.graph_vault),
             "separate_vaults": self.separate_vaults,
             "link_mode": link_mode,
+            "chunk_mode": chunk_mode,
+            "fragment_chars": fragment_chars,
+            "fragment_max_chars": fragment_max_chars,
             "sources": {},
             "fragments": {},
             "source_stubs": {},
@@ -98,7 +113,13 @@ class ObsidianGraphBuilder:
         """Create fragment notes linked to the source. Returns fragment rel paths (graph vault)."""
         from agent_memory.vault.models import VaultSection
 
-        sections = segment_note(note)
+        sections = segment_note(
+            note,
+            mode=self.chunk_mode,
+            target_chars=self.fragment_chars,
+            max_fragment_chars=self.fragment_max_chars,
+            preserve_markup=self.preserve_markup,
+        )
         if not sections and note.body.strip():
             sections = [
                 VaultSection(
@@ -128,7 +149,9 @@ class ObsidianGraphBuilder:
                     f"cg/source/{_slug_tag(note.path.stem)}",
                 ]
             )
-            related = self._related_fragment_links(note.path.stem, sec.heading, sections)
+            related = self._related_fragment_links(
+                note.path.stem, sec.heading, sections, from_rel=rel
+            )
             graph_section = self._graph_section(note, sec.heading, source_ref)
 
             content = f"""---
@@ -279,7 +302,7 @@ tags:
         if note.rel_path in self._stub_cache:
             return self._stub_cache[note.rel_path]
 
-        slug = note_title_to_filename(note.rel_path.replace("/", "--"))
+        slug = source_rel_to_stub_stem(note.rel_path)
         rel = self._graph_rel(f"Sources/{slug}.md")
         out = self.graph_vault / rel
         preview = note.body[:400].replace("\n", " ")
@@ -326,7 +349,12 @@ Index card for a note in the **source vault** (not duplicated here).
         return "\n".join(lines)
 
     def _related_fragment_links(
-        self, note_stem: str, heading: str, sections: list
+        self,
+        note_stem: str,
+        heading: str,
+        sections: list,
+        *,
+        from_rel: str,
     ) -> str:
         links = []
         for sec in sections:
@@ -334,7 +362,7 @@ Index card for a note in the **source vault** (not duplicated here).
                 continue
             slug = note_title_to_filename(f"{note_stem}--{sec.heading}")
             rel = self._graph_rel(f"Fragments/{slug}.md")
-            links.append(f"- {wikilink_for_path(rel)}")
+            links.append(f"- {wikilink_for_path(rel, from_rel=from_rel)}")
         return "\n".join(links) if links else "_None._"
 
 

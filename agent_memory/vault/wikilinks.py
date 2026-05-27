@@ -125,11 +125,36 @@ def note_title_to_filename(title: str) -> str:
     return name[:120] if name else "untitled"
 
 
-def wikilink_for_path(rel_path: str, heading: Optional[str] = None) -> str:
-    """Build Obsidian wikilink from vault-relative path (with or without .md)."""
-    stem = rel_path
+def source_rel_to_stub_stem(source_rel_path: str) -> str:
+    """Map ``docs/concepts/cache.md`` → ``docs--concepts--cache`` (no ``.md`` in slug)."""
+    p = source_rel_path.replace("\\", "/")
+    if p.lower().endswith(".md"):
+        p = p[:-3]
+    return note_title_to_filename(p.replace("/", "--"))
+
+
+def wikilink_for_path(
+    rel_path: str,
+    heading: Optional[str] = None,
+    *,
+    from_rel: Optional[str] = None,
+) -> str:
+    """
+    Build Obsidian wikilink from vault-relative path.
+
+    Obsidian expects ``[[path/to/note]]`` without a ``.md`` suffix. When
+    ``from_rel`` is in the same folder, use a short name (e.g. ``[[cache--Caching]]``).
+    """
+    stem = rel_path.replace("\\", "/")
     if stem.lower().endswith(".md"):
         stem = stem[:-3]
+
+    if from_rel:
+        from_p = Path(from_rel.replace("\\", "/"))
+        to_p = Path(stem)
+        if from_p.parent == to_p.parent and str(from_p.parent) not in ("", "."):
+            stem = to_p.name
+
     if heading:
         return f"[[{stem}#{heading}]]"
     return f"[[{stem}]]"
