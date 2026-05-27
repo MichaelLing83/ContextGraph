@@ -2,7 +2,10 @@
 
 from pathlib import Path
 
-from agent_memory.vault.obsidian_graph import ObsidianGraphBuilder
+from agent_memory.vault.obsidian_graph import (
+    ObsidianGraphBuilder,
+    related_section_indices,
+)
 from agent_memory.vault.obsidian_index import ObsidianVaultIndex
 from agent_memory.vault.parser import parse_vault_note
 from agent_memory.vault.wikilinks import (
@@ -106,6 +109,50 @@ def test_wikilink_for_path():
 
 def test_source_stub_stem_no_double_md():
     assert source_rel_to_stub_stem("docs/concepts/cache.md") == "docs--concepts--cache"
+
+
+def test_related_section_indices():
+    assert related_section_indices(0, 1, mode="all") == []
+    assert related_section_indices(2, 5, mode="all") == [0, 1, 3, 4]
+    assert related_section_indices(2, 5, mode="none") == []
+    assert related_section_indices(2, 5, mode="adjacent") == [1, 3]
+    assert related_section_indices(0, 5, mode="topk", topk=2) == [1, 2]
+    assert related_section_indices(4, 5, mode="topk", topk=2) == [3, 2]
+    assert related_section_indices(2, 5, mode="topk", topk=2) == [1, 3]
+
+
+def test_related_mode_none_on_build(tmp_path: Path):
+    note = tmp_path / "Doc.md"
+    note.write_text(
+        "# Doc\n\n## One\n\na\n\n## Two\n\nb\n\n## Three\n\nc\n",
+        encoding="utf-8",
+    )
+    raw = parse_vault_note(note, tmp_path)
+    builder = ObsidianGraphBuilder(
+        tmp_path, graph_dir="ContextGraph", related_mode="none"
+    )
+    builder.ingest_note(raw)
+    for frag in (tmp_path / "ContextGraph" / "Fragments").glob("*.md"):
+        related_block = frag.read_text(encoding="utf-8").split("## Related", 1)[1]
+        assert "_None._" in related_block
+        assert "[[Fragments/" not in related_block
+
+
+def test_related_mode_adjacent_on_build(tmp_path: Path):
+    note = tmp_path / "Doc.md"
+    note.write_text(
+        "# Doc\n\n## One\n\na\n\n## Two\n\nb\n\n## Three\n\nc\n",
+        encoding="utf-8",
+    )
+    raw = parse_vault_note(note, tmp_path)
+    builder = ObsidianGraphBuilder(
+        tmp_path, graph_dir="ContextGraph", related_mode="adjacent"
+    )
+    builder.ingest_note(raw)
+    middle = tmp_path / "ContextGraph" / "Fragments" / "Doc--Two.md"
+    assert middle.is_file()
+    related = middle.read_text(encoding="utf-8").split("## Related", 1)[1]
+    assert related.count("- [[") == 2
 
 
 def test_wikilink_short_same_folder():

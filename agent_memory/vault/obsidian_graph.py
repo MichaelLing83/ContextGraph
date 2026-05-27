@@ -21,6 +21,42 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_GRAPH_DIR = "ContextGraph"
 LinkMode = Literal["stub", "symlink", "frontmatter"]
+RelatedMode = Literal["all", "none", "adjacent", "topk"]
+DEFAULT_RELATED_TOPK = 2
+
+
+def related_section_indices(
+    index: int,
+    n_sections: int,
+    *,
+    mode: RelatedMode = "all",
+    topk: int = DEFAULT_RELATED_TOPK,
+) -> List[int]:
+    """
+    Indices of sibling fragments to link from section ``index``.
+
+    ``topk``: at most ``topk`` others, nearest in document order first
+    (smallest ``abs(i - j)``, then lower index on ties).
+    """
+    if n_sections <= 1 or mode == "none":
+        return []
+    if mode == "all":
+        return [j for j in range(n_sections) if j != index]
+    if mode == "adjacent":
+        out: List[int] = []
+        if index > 0:
+            out.append(index - 1)
+        if index < n_sections - 1:
+            out.append(index + 1)
+        return out
+    if mode == "topk":
+        k = max(1, topk)
+        others = sorted(
+            (j for j in range(n_sections) if j != index),
+            key=lambda j: (abs(j - index), j),
+        )
+        return others[:k]
+    raise ValueError(f"unknown related mode: {mode!r}")
 
 _REGISTRY_NAME = ".graph_registry.json"
 
@@ -51,6 +87,8 @@ class ObsidianGraphBuilder:
         fragment_chars: int = 500,
         fragment_max_chars: int = 3000,
         preserve_markup: bool = True,
+        related_mode: RelatedMode = "all",
+        related_topk: int = DEFAULT_RELATED_TOPK,
     ):
         self.graph_vault = graph_vault.resolve()
         self.source_vault = (source_vault or graph_vault).resolve()
@@ -60,6 +98,8 @@ class ObsidianGraphBuilder:
         self.fragment_chars = fragment_chars
         self.fragment_max_chars = fragment_max_chars
         self.preserve_markup = preserve_markup
+        self.related_mode = related_mode
+        self.related_topk = related_topk
 
         if graph_dir:
             self.graph_root = self.graph_vault / graph_dir
@@ -79,6 +119,8 @@ class ObsidianGraphBuilder:
             "chunk_mode": chunk_mode,
             "fragment_chars": fragment_chars,
             "fragment_max_chars": fragment_max_chars,
+            "related_mode": related_mode,
+            "related_topk": related_topk,
             "sources": {},
             "fragments": {},
             "source_stubs": {},
@@ -133,7 +175,7 @@ class ObsidianGraphBuilder:
         source_ref = self._source_reference(note)
         fragment_paths: List[str] = []
 
-        for sec in sections:
+        for sec_idx, sec in enumerate(sections):
             frag_id = f"frag_{uuid.uuid4().hex[:8]}"
             slug = note_title_to_filename(f"{note.path.stem}--{sec.heading}")
             rel = self._graph_rel(f"Fragments/{slug}.md")
@@ -150,7 +192,10 @@ class ObsidianGraphBuilder:
                 ]
             )
             related = self._related_fragment_links(
-                note.path.stem, sec.heading, sections, from_rel=rel
+                note.path.stem,
+                sections,
+                sec_idx,
+                from_rel=rel,
             )
             graph_section = self._graph_section(note, sec.heading, source_ref)
 
@@ -351,15 +396,20 @@ Index card for a note in the **source vault** (not duplicated here).
     def _related_fragment_links(
         self,
         note_stem: str,
-        heading: str,
         sections: list,
+        section_index: int,
         *,
         from_rel: str,
     ) -> str:
+        indices = related_section_indices(
+            section_index,
+            len(sections),
+            mode=self.related_mode,
+            topk=self.related_topk,
+        )
         links = []
-        for sec in sections:
-            if sec.heading == heading:
-                continue
+        for j in indices:
+            sec = sections[j]
             slug = note_title_to_filename(f"{note_stem}--{sec.heading}")
             rel = self._graph_rel(f"Fragments/{slug}.md")
             links.append(f"- {wikilink_for_path(rel, from_rel=from_rel)}")

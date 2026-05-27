@@ -96,6 +96,25 @@ def main() -> None:
         action="store_true",
         help="Strip code blocks and links to plain text (legacy lightweight mode)",
     )
+    parser.add_argument(
+        "--related-mode",
+        choices=("all", "none", "adjacent", "topk"),
+        default="all",
+        help=(
+            "How fragments from the same source note link in ## Related: "
+            "all (default), none, adjacent (prev/next only), topk (nearest by order)"
+        ),
+    )
+    parser.add_argument(
+        "--related-topk",
+        type=int,
+        default=2,
+        metavar="K",
+        help=(
+            "With --related-mode=topk: max sibling links per fragment, "
+            "nearest in document order (default: 2)"
+        ),
+    )
     args = parser.parse_args()
 
     if args.vault and not args.source_vault:
@@ -127,6 +146,8 @@ def main() -> None:
         fragment_chars=args.fragment_chars,
         fragment_max_chars=args.fragment_max_chars,
         preserve_markup=not args.strip_markup,
+        related_mode=args.related_mode,
+        related_topk=args.related_topk,
     )
     builder.load_registry()
     builder.setup_cross_vault_links()
@@ -159,6 +180,8 @@ def main() -> None:
         "fragment_chars": args.fragment_chars,
         "fragment_max_chars": args.fragment_max_chars,
         "preserve_markup": not args.strip_markup,
+        "related_mode": args.related_mode,
+        "related_topk": args.related_topk,
         "notes_ingested": ingested,
         "errors": errors[:20],
         "moc": str(moc.relative_to(graph_vault)),

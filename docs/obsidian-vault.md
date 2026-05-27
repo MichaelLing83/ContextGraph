@@ -58,7 +58,28 @@ Options:
 | `--chunk-mode adaptive` | Greedy merge by `--fragment-chars`; short notes stay whole |
 | `--fragment-chars 500` | Target size for `adaptive` mode (default 500) |
 | `--fragment-max-chars 3000` | Cap per fragment; longer pieces split on `\\n\\n` paragraphs (default 3000; `0`=off) |
+| `--related-mode all` | Sibling links in each fragment’s `## Related` section (see below) |
+| `--related-topk 2` | With `topk` mode: max links per fragment (default **2**) |
 | `--vault PATH` | Legacy: single vault, writes under `ContextGraph/` subfolder |
+
+### Sibling fragment links (`--related-mode`)
+
+Fragments from the same source note can wikilink to each other under `## Related`:
+
+| Mode | Behavior |
+|------|----------|
+| `all` | (default) Link to every other fragment from that note |
+| `none` | No sibling links (only link to source via `## Graph`) |
+| `adjacent` | Link only to the previous and next fragment in reading order |
+| `topk` | Link to at most **K** siblings; pick those with smallest section index distance first (ties: lower index). Default **K=2** (`--related-topk`) |
+
+Example with five sections `A B C D E` and `--related-mode topk --related-topk 2`:
+
+- `A` → `B`, `C`
+- `C` → `B`, `D`
+- `E` → `D`, `C`
+
+Use `adjacent` or `topk` to keep Obsidian’s graph view sparse on long docs.
 
 ### Adaptive chunking (`--chunk-mode adaptive`)
 
