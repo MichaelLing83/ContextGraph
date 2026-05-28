@@ -9,6 +9,9 @@ from agent_memory.vault.models import RawVaultNote, VaultSection
 from agent_memory.vault.parser import markdown_to_plain_text
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
+_FENCE_BLOCK_RE = re.compile(
+    r"(?ms)^[ \t]*(```|~~~)[^\n]*\n.*?^[ \t]*\1[^\n]*(?:\n|$)"
+)
 ChunkMode = Literal["heading", "adaptive", "chapter"]
 
 
@@ -243,7 +246,10 @@ def _segment_by_headings_or_paragraphs(
     if not body:
         return []
 
-    matches = list(_HEADING_RE.finditer(body))
+    fence_spans = [m.span() for m in _FENCE_BLOCK_RE.finditer(body)]
+    matches = [
+        m for m in _HEADING_RE.finditer(body) if not _position_in_spans(m.start(), fence_spans)
+    ]
     if matches:
         return _sections_from_headings(matches, body, preserve_markup=preserve_markup)
 
@@ -322,3 +328,7 @@ def _sections_from_paragraphs(
         buf_len += len(para) + 2
     flush()
     return sections
+
+
+def _position_in_spans(pos: int, spans: list[tuple[int, int]]) -> bool:
+    return any(start <= pos < end for start, end in spans)

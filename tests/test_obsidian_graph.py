@@ -10,6 +10,7 @@ from agent_memory.vault.obsidian_index import ObsidianVaultIndex
 from agent_memory.vault.parser import parse_vault_note
 from agent_memory.vault.wikilinks import (
     extract_wikilinks,
+    note_title_to_filename,
     source_rel_to_stub_stem,
     wikilink_for_path,
 )
@@ -102,6 +103,35 @@ def test_build_graph_separate_vaults(tmp_path: Path):
     assert hits
 
 
+def test_recreate_missing_source_stub_from_stale_registry_cache(tmp_path: Path):
+    source = tmp_path / "SourceVault"
+    graph = tmp_path / "GraphVault"
+    source.mkdir()
+    graph.mkdir()
+    note = source / "Docs" / "Cache.md"
+    note.parent.mkdir(parents=True)
+    note.write_text("# Cache\n\n## Invalidation\n\nInvalidate on write.\n", encoding="utf-8")
+
+    raw = parse_vault_note(note, source)
+    first_builder = ObsidianGraphBuilder(graph, source_vault=source, link_mode="stub")
+    first_builder.ingest_note(raw)
+    first_builder.save_registry()
+    first_builder.write_moc()
+
+    stub_file = next((graph / "Sources").glob("*.md"))
+    stub_file.unlink()
+    assert not stub_file.exists()
+
+    second_builder = ObsidianGraphBuilder(graph, source_vault=source, link_mode="stub")
+    second_builder.load_registry()
+    second_builder.ingest_note(raw)
+    second_builder.save_registry()
+
+    recreated_stub = graph / "Sources" / stub_file.name
+    assert recreated_stub.is_file()
+    assert "[[Sources/" in (graph / "MOC.md").read_text(encoding="utf-8")
+
+
 def test_wikilink_for_path():
     assert wikilink_for_path("a/b.md") == "[[a/b]]"
     assert wikilink_for_path("a/b.md", "H") == "[[a/b#H]]"
@@ -109,6 +139,12 @@ def test_wikilink_for_path():
 
 def test_source_stub_stem_no_double_md():
     assert source_rel_to_stub_stem("docs/concepts/cache.md") == "docs--concepts--cache"
+
+
+def test_note_title_to_filename_strips_square_brackets():
+    assert note_title_to_filename("coiled--Managing script dependencies with uv – ]") == (
+        "coiled--Managing script dependencies with uv –"
+    )
 
 
 def test_related_section_indices():

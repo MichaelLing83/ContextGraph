@@ -120,7 +120,7 @@ def split_frontmatter(text: str) -> Tuple[dict, str]:
 
 def note_title_to_filename(title: str) -> str:
     """Safe filename stem for a graph node note."""
-    name = re.sub(r'[<>:"/\\|?*]', "", title).strip()
+    name = re.sub(r'[\[\]<>:"/\\|?*]', "", title).strip()
     name = re.sub(r"\s+", " ", name)
     return name[:120] if name else "untitled"
 

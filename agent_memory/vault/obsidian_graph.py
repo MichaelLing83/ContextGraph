@@ -344,8 +344,11 @@ tags:
         }
 
     def _ensure_source_stub(self, note: RawVaultNote) -> str:
-        if note.rel_path in self._stub_cache:
-            return self._stub_cache[note.rel_path]
+        cached_rel = self._stub_cache.get(note.rel_path)
+        if cached_rel:
+            cached_out = self.graph_vault / cached_rel
+            if cached_out.exists():
+                return cached_rel
 
         slug = source_rel_to_stub_stem(note.rel_path)
         rel = self._graph_rel(f"Sources/{slug}.md")

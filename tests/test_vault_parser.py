@@ -48,6 +48,33 @@ def test_segment_by_headings(tmp_path: Path):
     assert "First section" in one.body
 
 
+def test_ignore_headings_inside_fenced_code_blocks(tmp_path: Path):
+    md = tmp_path / "fenced.md"
+    md.write_text(
+        """# Root
+
+## Real section
+
+Before code.
+
+```python
+# Not a heading
+## Still not a heading
+print("ok")
+```
+
+After code.
+""",
+        encoding="utf-8",
+    )
+    note = parse_vault_note(md, tmp_path)
+    sections = segment_note(note, mode="heading")
+    headings = [s.heading for s in sections]
+    assert "Real section" in headings
+    assert "Not a heading" not in headings
+    assert "Still not a heading" not in headings
+
+
 def test_fragment_preserves_code_blocks_and_links(tmp_path: Path):
     md = tmp_path / "cache.md"
     md.write_text(
