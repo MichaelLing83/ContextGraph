@@ -124,14 +124,26 @@ uv run python scripts/query_obsidian_vault.py \
 | Flag | Description |
 |------|-------------|
 | `-q` / `--query` | Keywords (token match in title + body) |
+| `--exact-phrase` | Require a contiguous case-insensitive phrase in title or body (e.g. `"uv run"`) |
 | `--tag` | Require tag(s), e.g. `cg/fragment` (repeatable) |
 | `--hops 1` | Expand along wikilinks one step (graph neighbors) |
 | `--limit` | Max hits (default 15) |
 | `--graph-only` | Only notes tagged `cg/*` |
 | `--list-tags` | List all `cg/*` tags in the vault |
 | `--json` | Machine-readable output |
+| `--full-body` | With `--summary` or list/json mode: output full fragment body (no excerpt truncation) |
 
-**Score reasons** (in default list mode): `tag_filter`, `title`, `body`, `link_expand`.
+**Score reasons** (in default list mode): `tag_filter`, `title`, `body`, `exact_phrase:title`, `exact_phrase:body`, `link_expand`.
+
+Exact phrase example:
+
+```bash
+uv run python scripts/query_obsidian_vault.py \
+  --vault ~/Vaults/MyNotesGraph \
+  --exact-phrase "uv run" \
+  --hops 1 \
+  --limit 10
+```
 
 ## 3. Knowledge summary
 
@@ -148,9 +160,22 @@ uv run python scripts/query_obsidian_vault.py \
   --summary-out ./summary.md
 ```
 
+Full fragment body (no excerpt truncation):
+
+```bash
+uv run python scripts/query_obsidian_vault.py \
+  --vault ~/Vaults/MyNotesGraph \
+  --exact-phrase "uv run" \
+  --tag cg/fragment \
+  --limit 1 \
+  --summary \
+  --full-body
+```
+
 | Flag | Description |
 |------|-------------|
-| `--summary-max-chars` | Total length cap (default 6000) |
+| `--summary-max-chars` | Total length cap (default 6000; disabled with `--full-body`) |
+| `--full-body` | Emit full cleaned fragment bodies instead of 500-char excerpts |
 | `--limit` | How many fragments to include (search stage) |
 | `--summary-llm` | Rewrite into cohesive prose (needs `OPENAI_API_BASE` + `OPENAI_API_KEY` in `.env`) |
 | `--summary-meta` | Include title / stats (off by default) |

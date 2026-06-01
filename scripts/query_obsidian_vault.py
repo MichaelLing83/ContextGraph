@@ -31,7 +31,11 @@ from dotenv import load_dotenv
 load_dotenv(project_root / ".env")
 
 from agent_memory.vault.obsidian_index import ObsidianVaultIndex
-from agent_memory.vault.summarize import build_knowledge_summary, llm_polish_summary
+from agent_memory.vault.summarize import (
+    _clean_body,
+    build_knowledge_summary,
+    llm_polish_summary,
+)
 
 
 def main() -> None:
@@ -103,6 +107,11 @@ def main() -> None:
         action="store_true",
         help="Include title/stats in summary output (off by default: content only)",
     )
+    parser.add_argument(
+        "--full-body",
+        action="store_true",
+        help="Output full fragment bodies (with --summary; no per-excerpt truncation)",
+    )
     args = parser.parse_args()
 
     vault = args.vault.expanduser().resolve()
@@ -141,7 +150,8 @@ def main() -> None:
             args.query or args.exact_phrase,
             hits,
             index,
-            max_chars=args.summary_max_chars,
+            max_chars=0 if args.full_body else args.summary_max_chars,
+            full_body=args.full_body,
             include_meta=args.summary_meta,
         )
         if args.summary_llm:
@@ -168,19 +178,23 @@ def main() -> None:
         return
 
     if args.json:
+        def hit_payload(h):
+            payload = {
+                "path": h.rel_path,
+                "title": h.title,
+                "score": h.score,
+                "reasons": h.reasons,
+                "tags": sorted(h.tags),
+                "snippet": h.snippet,
+            }
+            if args.full_body:
+                note = index.notes.get(h.rel_path)
+                payload["body"] = _clean_body(note.body) if note else h.snippet
+            return payload
+
         print(
             json.dumps(
-                [
-                    {
-                        "path": h.rel_path,
-                        "title": h.title,
-                        "score": h.score,
-                        "reasons": h.reasons,
-                        "tags": sorted(h.tags),
-                        "snippet": h.snippet,
-                    }
-                    for h in hits
-                ],
+                [hit_payload(h) for h in hits],
                 indent=2,
                 ensure_ascii=False,
             )
@@ -198,7 +212,12 @@ def main() -> None:
         print(f"   {h.rel_path}  (score={h.score:.1f}  {','.join(h.reasons)})")
         if tag_str:
             print(f"   {tag_str}")
-        if h.snippet:
+        if args.full_body:
+            note = index.notes.get(h.rel_path)
+            if note:
+                print()
+                print(_clean_body(note.body))
+        elif h.snippet:
             print(f"   … {h.snippet}")
         print()
 

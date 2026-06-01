@@ -58,3 +58,45 @@ def test_excerpt_finds_query():
     text = "aaa " * 50 + "utmärkt" + " bbb" * 50
     ex = _excerpt(text, "utmärkt", 100)
     assert "utmärkt" in ex
+
+
+def test_build_summary_full_body_no_truncation(tmp_path):
+    vault = tmp_path / "g"
+    frag = vault / "Fragments" / "a.md"
+    frag.parent.mkdir(parents=True)
+    long_body = "uv run " + ("detail " * 200)
+    frag.write_text(
+        f"""---
+source_rel_path: docs/tools.md
+tags:
+  - cg/fragment
+  - cg/source/tools
+---
+
+# Tools
+
+{long_body}
+
+## Graph
+
+- x
+""",
+        encoding="utf-8",
+    )
+    index = ObsidianVaultIndex(vault)
+    index.build()
+    hits = [
+        SearchHit(
+            rel_path=str(frag.relative_to(vault)),
+            title="Tools",
+            score=5.0,
+            reasons=["body"],
+            snippet="uv run",
+            tags={"cg/fragment", "cg/source/tools"},
+        )
+    ]
+    out = build_knowledge_summary("uv run", hits, index, full_body=True, max_chars=0)
+    assert "detail detail" in out
+    assert not out.rstrip().endswith("…")
+    out_short = build_knowledge_summary("uv run", hits, index, per_excerpt=80)
+    assert out_short.rstrip().endswith("…")

@@ -75,12 +75,14 @@ def build_knowledge_summary(
     *,
     max_chars: int = 6000,
     per_excerpt: int = 500,
+    full_body: bool = False,
     include_meta: bool = False,
 ) -> str:
     """
     Merge search hits into prose-oriented markdown (content only by default).
 
     Groups fragments by source chapter, deduplicates overlapping excerpts.
+    When ``full_body`` is True, emit each hit's cleaned body without excerpt truncation.
     """
     if not hits:
         return f"未找到与「{query}」相关的笔记。" if query else "未找到匹配的笔记。"
@@ -106,7 +108,10 @@ def build_knowledge_summary(
             note = index.notes.get(hit.rel_path)
             raw = note.body if note else hit.snippet
             cleaned = _clean_body(raw)
-            excerpt = _excerpt(cleaned, query, per_excerpt)
+            if full_body:
+                excerpt = cleaned
+            else:
+                excerpt = _excerpt(cleaned, query, per_excerpt)
             if not excerpt or excerpt in seen_excerpts:
                 continue
             seen_excerpts.add(excerpt)
@@ -117,7 +122,7 @@ def build_knowledge_summary(
             continue
 
         block_text = "\n".join(block).strip() + "\n"
-        if used + len(block_text) > max_chars:
+        if max_chars > 0 and used + len(block_text) > max_chars:
             remaining = max_chars - used
             if remaining < 200:
                 break
