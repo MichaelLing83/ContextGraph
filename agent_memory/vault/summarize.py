@@ -135,36 +135,3 @@ def build_knowledge_summary(
         return "未找到可提取的正文。"
 
     return "\n".join(lines).strip() + "\n"
-
-
-def llm_polish_summary(
-    draft: str,
-    query: str,
-    *,
-    api_base: str,
-    api_key: str,
-    model: str = "claude-sonnet-4-20250514",
-) -> str:
-    """Optional: rewrite grouped draft into one cohesive paragraph via LLM."""
-    from openai import OpenAI
-
-    client = OpenAI(base_url=api_base, api_key=api_key)
-    prompt = f"""You are summarizing notes from an Obsidian knowledge graph for the topic/query: "{query}".
-
-Below is structured excerpt material (may be Swedish or other languages). Write ONE cohesive summary in the same language as the majority of the source text.
-
-Rules:
-- Synthesize, do not list files
-- Keep facts from the excerpts only; do not invent
-- 2-4 short paragraphs, readable prose
-- You may use a short bullet list only if it improves clarity
-
-Source material:
-{draft[:12000]}
-"""
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=1200,
-    )
-    return (resp.choices[0].message.content or draft).strip()

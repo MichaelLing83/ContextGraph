@@ -60,7 +60,6 @@ Options:
 | `--fragment-max-chars 3000` | Cap per fragment; longer pieces split on `\\n\\n` paragraphs (default 3000; `0`=off) |
 | `--related-mode all` | Sibling links in each fragment’s `## Related` section (see below) |
 | `--related-topk 2` | With `topk` mode: max links per fragment (default **2**) |
-| `--vault PATH` | Legacy: single vault, writes under `ContextGraph/` subfolder |
 
 ### Sibling fragment links (`--related-mode`)
 
@@ -94,11 +93,9 @@ All source text is represented across fragments; nothing is dropped from the gra
 
 After adaptive/heading merge, any fragment still above `--fragment-max-chars` is split again by blank-line paragraphs (e.g. `Title (1/3)`, `Title (2/3)`). A single paragraph above the cap is kept whole.
 
-### Markup in fragments (default: preserved)
+### Markup in fragments
 
-By default, fragment bodies keep **markdown as in the source** (fenced code blocks, `[links](url)`, etc.). This is required for technical docs (TOML/YAML examples, API links).
-
-Use `--strip-markup` only if you want the old lightweight mode (no code blocks, links reduced to plain text).
+Fragment bodies keep **markdown as in the source** (fenced code blocks, `[links](url)`, etc.). This is required for technical docs (TOML/YAML examples, API links).
 
 ```bash
 uv run python scripts/build_obsidian_graph.py \
@@ -177,7 +174,6 @@ uv run python scripts/query_obsidian_vault.py \
 | `--summary-max-chars` | Total length cap (default 6000; disabled with `--full-body`) |
 | `--full-body` | Emit full cleaned fragment bodies instead of 500-char excerpts |
 | `--limit` | How many fragments to include (search stage) |
-| `--summary-llm` | Rewrite into cohesive prose (needs `OPENAI_API_BASE` + `OPENAI_API_KEY` in `.env`) |
 | `--summary-meta` | Include title / stats (off by default) |
 
 ## Fragment note format

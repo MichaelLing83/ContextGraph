@@ -1,14 +1,10 @@
 """Build a context graph as Obsidian notes (no Neo4j).
 
-Recommended: separate source and graph vaults.
+Separate source and graph vaults:
 
     uv run python scripts/build_obsidian_graph.py \\
         --source-vault ~/Notes \\
         --graph-vault ~/NotesGraph
-
-Legacy (graph as subfolder inside one vault):
-
-    uv run python scripts/build_obsidian_graph.py --vault ~/Notes
 
 Usage:
     uv run python scripts/build_obsidian_graph.py --source-vault ~/Notes --graph-vault ~/NotesGraph
@@ -32,10 +28,7 @@ from agent_memory.vault.graph_stats import (
     compute_graph_vault_stats,
     format_graph_stats,
 )
-from agent_memory.vault.obsidian_graph import (
-    DEFAULT_GRAPH_DIR,
-    ObsidianGraphBuilder,
-)
+from agent_memory.vault.obsidian_graph import ObsidianGraphBuilder
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -48,22 +41,19 @@ def main() -> None:
     parser.add_argument(
         "--source-vault",
         type=Path,
+        required=True,
         help="Vault to read original markdown from",
     )
     parser.add_argument(
         "--graph-vault",
         type=Path,
+        required=True,
         help="Separate vault to write the knowledge graph into",
-    )
-    parser.add_argument(
-        "--vault",
-        type=Path,
-        help="(Legacy) Single vault: read notes and write under --graph-dir/",
     )
     parser.add_argument(
         "--graph-dir",
         default="",
-        help=f"Subfolder inside graph vault when using --vault (default: {DEFAULT_GRAPH_DIR})",
+        help="Optional subfolder inside graph vault (default: vault root)",
     )
     parser.add_argument(
         "--link-mode",
@@ -92,11 +82,6 @@ def main() -> None:
         help="Hard cap: split longer fragments by markdown paragraphs (default: 3000, 0=off)",
     )
     parser.add_argument(
-        "--strip-markup",
-        action="store_true",
-        help="Strip code blocks and links to plain text (legacy lightweight mode)",
-    )
-    parser.add_argument(
         "--related-mode",
         choices=("all", "none", "adjacent", "topk"),
         default="all",
@@ -117,18 +102,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if args.vault and not args.source_vault:
-        source_vault = args.vault.expanduser().resolve()
-        graph_vault = source_vault
-        graph_dir = args.graph_dir or DEFAULT_GRAPH_DIR
-    elif args.source_vault and args.graph_vault:
-        source_vault = args.source_vault.expanduser().resolve()
-        graph_vault = args.graph_vault.expanduser().resolve()
-        graph_dir = args.graph_dir
-    else:
-        parser.error(
-            "Provide --source-vault and --graph-vault, or legacy --vault"
-        )
+    source_vault = args.source_vault.expanduser().resolve()
+    graph_vault = args.graph_vault.expanduser().resolve()
+    graph_dir = args.graph_dir
 
     if not source_vault.is_dir():
         logger.error("Source vault not found: %s", source_vault)
@@ -145,7 +121,6 @@ def main() -> None:
         chunk_mode=args.chunk_mode,
         fragment_chars=args.fragment_chars,
         fragment_max_chars=args.fragment_max_chars,
-        preserve_markup=not args.strip_markup,
         related_mode=args.related_mode,
         related_topk=args.related_topk,
     )
@@ -179,7 +154,7 @@ def main() -> None:
         "chunk_mode": args.chunk_mode,
         "fragment_chars": args.fragment_chars,
         "fragment_max_chars": args.fragment_max_chars,
-        "preserve_markup": not args.strip_markup,
+        "preserve_markup": True,
         "related_mode": args.related_mode,
         "related_topk": args.related_topk,
         "notes_ingested": ingested,

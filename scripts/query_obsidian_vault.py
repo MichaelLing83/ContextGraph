@@ -10,31 +10,22 @@ Usage:
 
     # Merge hits into one knowledge summary (markdown)
     uv run python scripts/query_obsidian_vault.py --vault ~/Graph -q "utmärkt" --tag cg/fragment --summary
-
-    # Optional LLM polish (needs LiteLLM / OpenAI-compatible API in .env)
-    uv run python scripts/query_obsidian_vault.py --vault ~/Graph -q "utmärkt" --summary --summary-llm
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from dotenv import load_dotenv
-
-load_dotenv(project_root / ".env")
-
 from agent_memory.vault.obsidian_index import ObsidianVaultIndex
 from agent_memory.vault.summarize import (
     _clean_body,
     build_knowledge_summary,
-    llm_polish_summary,
 )
 
 
@@ -98,11 +89,6 @@ def main() -> None:
         help="Max length of merged summary (default: 6000)",
     )
     parser.add_argument(
-        "--summary-llm",
-        action="store_true",
-        help="Polish --summary with an LLM (OPENAI_API_BASE + OPENAI_API_KEY in .env)",
-    )
-    parser.add_argument(
         "--summary-meta",
         action="store_true",
         help="Include title/stats in summary output (off by default: content only)",
@@ -154,22 +140,6 @@ def main() -> None:
             full_body=args.full_body,
             include_meta=args.summary_meta,
         )
-        if args.summary_llm:
-            api_base = os.environ.get("OPENAI_API_BASE", "http://localhost:4000/v1")
-            api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get(
-                "LITELLM_MASTER_KEY"
-            )
-            if not api_key:
-                print("Missing OPENAI_API_KEY for --summary-llm", file=sys.stderr)
-                sys.exit(1)
-            model = os.environ.get("SUMMARY_LLM_MODEL", "claude-sonnet-4-20250514")
-            text = llm_polish_summary(
-                text,
-                args.query or args.exact_phrase,
-                api_base=api_base,
-                api_key=api_key,
-                model=model,
-            )
         if args.summary_out:
             args.summary_out.expanduser().write_text(text, encoding="utf-8")
             print(f"Wrote summary to {args.summary_out}")
