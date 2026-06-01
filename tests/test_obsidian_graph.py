@@ -199,3 +199,38 @@ def test_wikilink_short_same_folder():
         )
         == "[[cache--Caching]]"
     )
+
+
+def test_search_exact_phrase_filters_to_contiguous_match(tmp_path: Path):
+    (tmp_path / "a.md").write_text(
+        "# A\n\nUse `uv run` for script execution.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "b.md").write_text(
+        "# B\n\nUse uv to run scripts locally.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "c.md").write_text(
+        "# uv run cookbook\n\nExamples.\n",
+        encoding="utf-8",
+    )
+
+    index = ObsidianVaultIndex(tmp_path)
+    index.build()
+
+    hits = index.search("uv run", exact_phrase="uv run", limit=10)
+    hit_paths = {h.rel_path for h in hits}
+    assert "a.md" in hit_paths
+    assert "c.md" in hit_paths
+    assert "b.md" not in hit_paths
+
+
+def test_search_exact_phrase_works_without_token_query(tmp_path: Path):
+    (tmp_path / "a.md").write_text("# A\n\nRun with uv run.\n", encoding="utf-8")
+    (tmp_path / "b.md").write_text("# B\n\nRun with uv.\n", encoding="utf-8")
+
+    index = ObsidianVaultIndex(tmp_path)
+    index.build()
+
+    hits = index.search("", exact_phrase="uv run", limit=10)
+    assert [h.rel_path for h in hits] == ["a.md"]

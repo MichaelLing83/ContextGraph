@@ -124,6 +124,7 @@ class ObsidianVaultIndex:
         *,
         tags: Optional[List[str]] = None,
         tag_prefix: str = "",
+        exact_phrase: str = "",
         hops: int = 0,
         limit: int = 20,
     ) -> List[SearchHit]:
@@ -137,6 +138,7 @@ class ObsidianVaultIndex:
           - notes linked from high-scoring hits (if hops > 0)
         """
         q_tokens = set(_TOKEN_RE.findall(query.lower()))
+        phrase = exact_phrase.strip().lower()
         required_tags = set(tags or [])
         hits: Dict[str, SearchHit] = {}
 
@@ -151,7 +153,12 @@ class ObsidianVaultIndex:
                 for t in n.tags
             ):
                 return
-            snippet = _snippet(n.body, q_tokens)
+            text_has_phrase = phrase and (
+                phrase in n.title.lower() or phrase in n.body.lower()
+            )
+            if phrase and not text_has_phrase:
+                return
+            snippet = _snippet(n.body, q_tokens, phrase=phrase)
             prev = hits.get(rel)
             if prev is None or base > prev.score:
                 hits[rel] = SearchHit(
@@ -175,6 +182,15 @@ class ObsidianVaultIndex:
                     reasons.append(f"tag:{tag}")
             title_overlap = q_tokens & set(_TOKEN_RE.findall(n.title.lower()))
             body_overlap = q_tokens & n.tokens
+            if phrase:
+                phrase_in_title = phrase in n.title.lower()
+                phrase_in_body = phrase in n.body.lower()
+                if phrase_in_title:
+                    s += 4.0
+                    reasons.append("exact_phrase:title")
+                elif phrase_in_body:
+                    s += 2.0
+                    reasons.append("exact_phrase:body")
             if title_overlap:
                 s += 2.0 * len(title_overlap)
                 reasons.append("title")
@@ -222,8 +238,15 @@ def _frontmatter_raw(text: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
-def _snippet(body: str, tokens: Set[str], width: int = 160) -> str:
+def _snippet(body: str, tokens: Set[str], *, phrase: str = "", width: int = 160) -> str:
     plain = re.sub(r"\s+", " ", body).strip()
+    if phrase and plain:
+        idx = plain.lower().find(phrase)
+        if idx >= 0:
+            start = max(0, idx - 40)
+            return plain[start : start + width] + (
+                "…" if start + width < len(plain) else ""
+            )
     if not tokens or not plain:
         return plain[:width]
     lower = plain.lower()

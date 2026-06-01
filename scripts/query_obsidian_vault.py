@@ -44,6 +44,11 @@ def main() -> None:
     )
     parser.add_argument("-q", "--query", default="", help="Text query (optional if --tag set)")
     parser.add_argument(
+        "--exact-phrase",
+        default="",
+        help="Require this exact phrase in title or body (case-insensitive)",
+    )
+    parser.add_argument(
         "--tag",
         action="append",
         default=[],
@@ -116,13 +121,14 @@ def main() -> None:
             print(f"{t} ({len(index.tag_to_notes[t])} notes)")
         return
 
-    if not args.query and not args.tag:
-        parser.error("Provide --query and/or --tag")
+    if not args.query and not args.tag and not args.exact_phrase:
+        parser.error("Provide --query and/or --tag and/or --exact-phrase")
 
     hits = index.search(
         args.query,
         tags=args.tag or None,
         tag_prefix=tag_prefix,
+        exact_phrase=args.exact_phrase,
         hops=args.hops,
         limit=args.limit,
     )
@@ -132,7 +138,7 @@ def main() -> None:
             print("No matches — nothing to summarize.")
             return
         text = build_knowledge_summary(
-            args.query,
+            args.query or args.exact_phrase,
             hits,
             index,
             max_chars=args.summary_max_chars,
@@ -148,7 +154,11 @@ def main() -> None:
                 sys.exit(1)
             model = os.environ.get("SUMMARY_LLM_MODEL", "claude-sonnet-4-20250514")
             text = llm_polish_summary(
-                text, args.query, api_base=api_base, api_key=api_key, model=model
+                text,
+                args.query or args.exact_phrase,
+                api_base=api_base,
+                api_key=api_key,
+                model=model,
             )
         if args.summary_out:
             args.summary_out.expanduser().write_text(text, encoding="utf-8")
