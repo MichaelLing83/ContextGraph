@@ -83,7 +83,7 @@ uv run python scripts/build_obsidian_graph.py \
 ```
 
 Requires `LITELLM_MASTER_KEY` or `OPENAI_API_KEY` (LiteLLM proxy at `http://localhost:4000/v1` by default). `build_report.json` includes `llm_summary_stats` (`cache_hits`, `llm_calls`, …).
-When `--llm-summary` is enabled, build logs print progress (`processed/total fragments`, cache hits, LLM calls, failures).
+When `--llm-summary` is enabled, the build shows a terminal progress bar (`tqdm`) with `processed/total fragments`, cache hits, LLM calls, and failures. Install with `uv pip install tqdm` if missing.
 
 Use a different model (and therefore a different cache file):
 

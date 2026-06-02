@@ -222,20 +222,6 @@ def main() -> None:
     )
     _clear_generated_graph_outputs(builder.graph_root)
 
-    if args.llm_summary:
-        summary_cache_path = cache_path_for_model(
-            builder.graph_root,
-            args.llm_summary_model,
-        )
-        summary_cache = FragmentSummaryCache(summary_cache_path)
-        summary_cache.load()
-        builder.summarizer = FragmentSummarizer(
-            api_base=args.llm_api_base,
-            api_key=args.llm_api_key,
-            model=args.llm_summary_model,
-            cache=summary_cache,
-        )
-
     builder.load_registry()
     builder.setup_cross_vault_links()
 
@@ -253,40 +239,74 @@ def main() -> None:
             "Summary cache: %s",
             cache_path_for_model(builder.graph_root, args.llm_summary_model),
         )
+        summary_cache_path = cache_path_for_model(
+            builder.graph_root,
+            args.llm_summary_model,
+        )
+        summary_cache = FragmentSummaryCache(summary_cache_path)
+        summary_cache.load()
+
+    fragment_bar = None
+    if args.llm_summary and estimated_fragments > 0:
+        try:
+            from tqdm import tqdm
+
+            fragment_bar = tqdm(
+                total=estimated_fragments,
+                desc="LLM summary",
+                unit="frag",
+                file=sys.stderr,
+                dynamic_ncols=True,
+            )
+        except ImportError:
+            logger.warning(
+                "tqdm not installed; using log progress instead "
+                "(uv pip install tqdm)"
+            )
+
+    def _on_summary_progress(stats) -> None:
+        if fragment_bar is not None:
+            fragment_bar.update(1)
+            fragment_bar.set_postfix(
+                llm=stats.llm_calls,
+                cache=stats.cache_hits,
+                fail=stats.failures,
+                refresh=False,
+            )
+            return
+        done = stats.cache_hits + stats.llm_calls + stats.skipped_empty + stats.failures
+        if done == estimated_fragments or done % 25 == 0:
+            logger.info(
+                "LLM summary progress %s | calls=%d cache_hits=%d failures=%d",
+                _format_progress(done, estimated_fragments),
+                stats.llm_calls,
+                stats.cache_hits,
+                stats.failures,
+            )
+
+    if args.llm_summary:
+        builder.summarizer = FragmentSummarizer(
+            api_base=args.llm_api_base,
+            api_key=args.llm_api_key,
+            model=args.llm_summary_model,
+            cache=summary_cache,
+            on_progress=_on_summary_progress,
+        )
 
     ingested = 0
     errors: list[str] = []
     start = time.time()
-    fragments_done = 0
-    last_progress_fragments = 0
-    last_progress_time = start
 
     for note in notes:
         try:
-            fragment_paths = builder.ingest_note(note)
+            builder.ingest_note(note)
             ingested += 1
-            if args.llm_summary and builder.summarizer is not None:
-                fragments_done += len(fragment_paths)
-                now = time.time()
-                should_log = (
-                    fragments_done == estimated_fragments
-                    or (fragments_done - last_progress_fragments) >= 25
-                    or (now - last_progress_time) >= 5.0
-                )
-                if should_log:
-                    s = builder.summarizer.stats
-                    logger.info(
-                        "LLM summary progress %s | calls=%d cache_hits=%d failures=%d",
-                        _format_progress(fragments_done, estimated_fragments),
-                        s.llm_calls,
-                        s.cache_hits,
-                        s.failures,
-                    )
-                    last_progress_fragments = fragments_done
-                    last_progress_time = now
         except Exception as e:
             errors.append(f"{note.rel_path}: {e}")
             logger.warning("Failed %s: %s", note.rel_path, e)
+
+    if fragment_bar is not None:
+        fragment_bar.close()
 
     moc = builder.write_moc()
     builder.save_registry()

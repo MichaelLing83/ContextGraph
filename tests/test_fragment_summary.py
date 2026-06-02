@@ -38,6 +38,24 @@ def test_fragment_summary_cache_miss_when_model_changes(tmp_path: Path):
     assert cache.get(body, model="model-b") is None
 
 
+def test_summarize_invokes_progress_callback(tmp_path: Path):
+    cache = FragmentSummaryCache(tmp_path / ".llm_summary_cache.json")
+    cache.put("Same text.", "Cached summary.", model="test-model")
+    progress_calls: list[int] = []
+
+    summarizer = FragmentSummarizer(
+        api_base="http://localhost:4000/v1",
+        api_key="test-key",
+        model="test-model",
+        cache=cache,
+        on_progress=lambda stats: progress_calls.append(stats.cache_hits),
+    )
+    summarizer.summarize("Heading", "Same text.")
+    summarizer.summarize("Empty", "   ")
+
+    assert len(progress_calls) == 2
+
+
 def test_fragment_body_hash_stable():
     body = "Same content"
     assert fragment_body_hash(body) == fragment_body_hash(body)

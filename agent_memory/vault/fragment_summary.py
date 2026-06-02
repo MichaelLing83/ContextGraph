@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +127,7 @@ class FragmentSummarizer:
         api_key: str,
         model: str = DEFAULT_MODEL,
         cache: FragmentSummaryCache,
+        on_progress: Optional[Callable[[FragmentSummaryStats], None]] = None,
     ):
         self.api_base = api_base.rstrip("/")
         if not self.api_base.endswith("/v1"):
@@ -135,6 +136,7 @@ class FragmentSummarizer:
         self.model = model
         self.cache = cache
         self.stats = FragmentSummaryStats()
+        self.on_progress = on_progress
         self._client = None
 
     def _get_client(self):
@@ -145,43 +147,47 @@ class FragmentSummarizer:
         return self._client
 
     def summarize(self, heading: str, body: str) -> Optional[str]:
-        text = body.strip()
-        if not text:
-            self.stats.skipped_empty += 1
-            return None
-
-        cached = self.cache.get(text, model=self.model)
-        if cached is not None:
-            self.stats.cache_hits += 1
-            return cached
-
-        prompt_body = text
-        if len(prompt_body) > MAX_BODY_CHARS:
-            prompt_body = prompt_body[:MAX_BODY_CHARS] + "…"
-
-        prompt = _SUMMARY_PROMPT.format(
-            heading=(heading or "Untitled").strip(),
-            body=prompt_body,
-        )
-
         try:
-            response = self._get_client().chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=300,
-                temperature=0.2,
+            text = body.strip()
+            if not text:
+                self.stats.skipped_empty += 1
+                return None
+
+            cached = self.cache.get(text, model=self.model)
+            if cached is not None:
+                self.stats.cache_hits += 1
+                return cached
+
+            prompt_body = text
+            if len(prompt_body) > MAX_BODY_CHARS:
+                prompt_body = prompt_body[:MAX_BODY_CHARS] + "…"
+
+            prompt = _SUMMARY_PROMPT.format(
+                heading=(heading or "Untitled").strip(),
+                body=prompt_body,
             )
-            raw = (response.choices[0].message.content or "").strip()
-        except Exception as e:
-            self.stats.failures += 1
-            logger.warning("LLM summary failed for %r: %s", heading, e)
-            return None
 
-        if not raw:
-            self.stats.failures += 1
-            return None
+            try:
+                response = self._get_client().chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=300,
+                    temperature=0.2,
+                )
+                raw = (response.choices[0].message.content or "").strip()
+            except Exception as e:
+                self.stats.failures += 1
+                logger.warning("LLM summary failed for %r: %s", heading, e)
+                return None
 
-        summary = " ".join(raw.split())
-        self.stats.llm_calls += 1
-        self.cache.put(text, summary, model=self.model)
-        return summary
+            if not raw:
+                self.stats.failures += 1
+                return None
+
+            summary = " ".join(raw.split())
+            self.stats.llm_calls += 1
+            self.cache.put(text, summary, model=self.model)
+            return summary
+        finally:
+            if self.on_progress is not None:
+                self.on_progress(self.stats)
