@@ -138,6 +138,7 @@ class FragmentSummarizer:
         self.stats = FragmentSummaryStats()
         self.on_progress = on_progress
         self._client = None
+        self._warned_empty_content = False
 
     def _get_client(self):
         if self._client is None:
@@ -174,13 +175,34 @@ class FragmentSummarizer:
                     max_tokens=300,
                     temperature=0.2,
                 )
-                raw = (response.choices[0].message.content or "").strip()
+                msg = response.choices[0].message
+                raw = (msg.content or "").strip()
             except Exception as e:
                 self.stats.failures += 1
                 logger.warning("LLM summary failed for %r: %s", heading, e)
                 return None
 
             if not raw:
+                if not self._warned_empty_content:
+                    reasoning = (
+                        getattr(msg, "reasoning", None)
+                        or getattr(msg, "reasoning_content", None)
+                        or ""
+                    )
+                    if reasoning:
+                        logger.warning(
+                            "Model %r returned empty message.content but non-empty reasoning. "
+                            "This Ollama/OpenAI-compatible behavior yields no summary; "
+                            "switch to a non-thinking model (e.g. llama3:latest) for --llm-summary.",
+                            self.model,
+                        )
+                    else:
+                        logger.warning(
+                            "Model %r returned empty message.content for summaries. "
+                            "Try another local model (e.g. llama3:latest).",
+                            self.model,
+                        )
+                    self._warned_empty_content = True
                 self.stats.failures += 1
                 return None
 

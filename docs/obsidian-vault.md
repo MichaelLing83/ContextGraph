@@ -65,7 +65,7 @@ Options:
 | `--related-mode all` | Sibling links in each fragment’s `## Related` section (see below) |
 | `--related-topk 2` | With `topk` mode: max links per fragment (default **2**) |
 | `--llm-summary` | Generate `cg_llm_summary` in fragment frontmatter via LLM (optional) |
-| `--llm-summary-model` | Model for `--llm-summary` (default: `claude-sonnet-4-20250514`; recommended local default: `qwen3.5:4b` with Ollama) |
+| `--llm-summary-model` | Model for `--llm-summary` (default: `claude-sonnet-4-20250514`; recommended local default: `llama3:latest` with Ollama) |
 
 ### LLM fragment summaries (`--llm-summary`)
 
@@ -102,10 +102,12 @@ uv run python scripts/build_obsidian_graph.py \
   --source-vault ~/Vaults/MyNotes \
   --graph-vault ~/Vaults/MyNotesGraph \
   --llm-summary \
-  --llm-summary-model qwen3.5:4b \
+  --llm-summary-model llama3:latest \
   --llm-api-base http://localhost:11434/v1 \
   --llm-api-key ollama
 ```
+
+Note: some reasoning-oriented local models can return empty `message.content` on OpenAI-compatible endpoints (text appears in a separate reasoning field), which causes summary failures in this pipeline. If that happens, switch to a non-thinking chat model like `llama3:latest` or `gemma3:4b`.
 
 ### Sibling fragment links (`--related-mode`)
 
