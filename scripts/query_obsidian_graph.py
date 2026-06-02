@@ -1,15 +1,15 @@
-"""Search an Obsidian vault using tags, wikilinks, and text (no Neo4j).
+"""Search an Obsidian graph vault using tags, wikilinks, and text (no Neo4j).
 
 Designed to complement Obsidian's UI: same primitives (#tags, [[links]]),
 usable from the terminal or scripts.
 
 Usage:
-    uv run python scripts/query_obsidian_vault.py --vault ~/Notes --query "cache invalidation"
-    uv run python scripts/query_obsidian_vault.py --vault ~/Notes -q "api" --tag cg/fragment --hops 1
-    uv run python scripts/query_obsidian_vault.py --vault ~/Notes --tag cg/fragment --list-tags
+    uv run python scripts/query_obsidian_graph.py --vault ~/Notes --query "cache invalidation"
+    uv run python scripts/query_obsidian_graph.py --vault ~/Notes -q "api" --tag cg/fragment --hops 1
+    uv run python scripts/query_obsidian_graph.py --vault ~/Notes --tag cg/fragment --list-tags
 
     # Merge hits into one knowledge summary (markdown)
-    uv run python scripts/query_obsidian_vault.py --vault ~/Graph -q "utmärkt" --tag cg/fragment --summary
+    uv run python scripts/query_obsidian_graph.py --vault ~/Graph -q "utmärkt" --tag cg/fragment --summary
 """
 
 from __future__ import annotations

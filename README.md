@@ -84,7 +84,7 @@ configs/                       # SWE-agent YAML configs
 
 scripts/                       # Runnable scripts
 ├── build_obsidian_graph.py    # Build graph vault from markdown (Obsidian-native)
-├── query_obsidian_vault.py    # Search + --summary over graph vault
+├── query_obsidian_graph.py    # Search + --summary over graph vault
 ├── build_vault_graph.py       # Ingest markdown into Neo4j (optional)
 ├── build_context_graph.py     # Build Neo4j graph from training trajectories
 ├── extract_strategies.py      # LLM strategy extraction

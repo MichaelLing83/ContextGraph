@@ -300,7 +300,7 @@ source_heading: "{_escape_yaml(sec.heading)}"
                 "## Search",
                 "",
                 "```bash",
-                f'uv run python scripts/query_obsidian_vault.py --vault "{self.graph_vault}" '
+                f'uv run python scripts/query_obsidian_graph.py --vault "{self.graph_vault}" '
                 '-q "your query" --tag cg/fragment --hops 1',
                 "```",
                 "",

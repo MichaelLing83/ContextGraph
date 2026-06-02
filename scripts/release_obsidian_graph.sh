@@ -194,7 +194,7 @@ Obsidian context graph release **${VERSION}**.
 \`\`\`bash
 uv pip install obsidian_context_graph-${VERSION}-py3-none-any.whl
 build-obsidian-graph --help
-query-obsidian-vault --help
+query-obsidian-graph --help
 \`\`\`
 
 ## Artifacts

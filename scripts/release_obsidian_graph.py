@@ -29,7 +29,7 @@ DIST_DIR = PROJECT_ROOT / "dist"
 
 OBSIDIAN_CLI_SCRIPTS = [
     "scripts/build_obsidian_graph.py",
-    "scripts/query_obsidian_vault.py",
+    "scripts/query_obsidian_graph.py",
     "scripts/repair_obsidian_graph_links.py",
 ]
 
@@ -95,7 +95,7 @@ dev = ["pytest>=7.0.0"]
 
 [project.scripts]
 build-obsidian-graph = "agent_memory.vault.cli:build_graph"
-query-obsidian-vault = "agent_memory.vault.cli:query_vault"
+query-obsidian-graph = "agent_memory.vault.cli:query_graph"
 repair-obsidian-graph-links = "agent_memory.vault.cli:repair_links"
 
 [build-system]
@@ -136,8 +136,8 @@ def build_graph() -> None:
     _run_bundled_script("build_obsidian_graph.py")
 
 
-def query_vault() -> None:
-    _run_bundled_script("query_obsidian_vault.py")
+def query_graph() -> None:
+    _run_bundled_script("query_obsidian_graph.py")
 
 
 def repair_links() -> None:
@@ -151,11 +151,11 @@ from __future__ import annotations
 
 import sys
 
-from agent_memory.vault.cli import build_graph, query_vault, repair_links
+from agent_memory.vault.cli import build_graph, query_graph, repair_links
 
 _COMMANDS = {
     "build-graph": ("build-obsidian-graph", build_graph),
-    "query-vault": ("query-obsidian-vault", query_vault),
+    "query-graph": ("query-obsidian-graph", query_graph),
     "repair-links": ("repair-obsidian-graph-links", repair_links),
 }
 
@@ -199,11 +199,11 @@ Run CLI (pick one):
 ```bash
 # Recommended with uv (macOS/Linux/Windows)
 uv run build-obsidian-graph --help
-uv run query-obsidian-vault --help
+uv run query-obsidian-graph --help
 
 # Cross-platform module fallback
 python -m agent_memory.vault build-graph --help
-python -m agent_memory.vault query-vault --help
+python -m agent_memory.vault query-graph --help
 
 # Windows: after activating .venv\\Scripts\\activate
 build-obsidian-graph --help
@@ -229,7 +229,7 @@ build-obsidian-graph \\
 ## Search
 
 ```bash
-query-obsidian-vault \\
+query-obsidian-graph \\
   --vault ~/Vaults/MyNotesGraph \\
   -q "your query" \\
   --tag cg/fragment \\

@@ -12,7 +12,7 @@ This complements the main SWE-agent pipeline (Neo4j + trajectories). Use it for 
 | Fragment | `Fragments/*.md` in the **graph vault** |
 | Edge | `[[wikilink]]` between fragment notes |
 | ErrorPattern / tags | `#cg/fragment`, `#cg/source/...`, etc. |
-| Neo4j retrieval | `query_obsidian_vault.py` (tags + links + text) |
+| Neo4j retrieval | `query_obsidian_graph.py` (tags + links + text) |
 
 Recommended layout: **two vaults**.
 
@@ -174,11 +174,11 @@ uv pip install obsidian_context_graph-<version>-py3-none-any.whl
 
 # Recommended (works on Windows/macOS/Linux when using uv venv)
 uv run build-obsidian-graph --help
-uv run query-obsidian-vault --help
+uv run query-obsidian-graph --help
 
 # Cross-platform fallback (no PATH entry required)
 python -m agent_memory.vault build-graph --help
-python -m agent_memory.vault query-vault --help
+python -m agent_memory.vault query-graph --help
 ```
 
 On Windows, console scripts install as `.venv\\Scripts\\build-obsidian-graph.exe`. Activate the venv first, or prefer `uv run` / `python -m` above.
@@ -186,7 +186,7 @@ On Windows, console scripts install as `.venv\\Scripts\\build-obsidian-graph.exe
 ## 2. Search
 
 ```bash
-uv run python scripts/query_obsidian_vault.py \
+uv run python scripts/query_obsidian_graph.py \
   --vault ~/Vaults/MyNotesGraph \
   -q "cache invalidation" \
   --tag cg/fragment \
@@ -210,7 +210,7 @@ uv run python scripts/query_obsidian_vault.py \
 Exact phrase example:
 
 ```bash
-uv run python scripts/query_obsidian_vault.py \
+uv run python scripts/query_obsidian_graph.py \
   --vault ~/Vaults/MyNotesGraph \
   --exact-phrase "uv run" \
   --hops 1 \
@@ -222,7 +222,7 @@ uv run python scripts/query_obsidian_vault.py \
 Merge top hits into one document (content only — no paths or build stats):
 
 ```bash
-uv run python scripts/query_obsidian_vault.py \
+uv run python scripts/query_obsidian_graph.py \
   --vault ~/Vaults/MyNotesGraph \
   -q "utmärkt" \
   --tag cg/fragment \
@@ -235,7 +235,7 @@ uv run python scripts/query_obsidian_vault.py \
 Full fragment body (no excerpt truncation):
 
 ```bash
-uv run python scripts/query_obsidian_vault.py \
+uv run python scripts/query_obsidian_graph.py \
   --vault ~/Vaults/MyNotesGraph \
   --exact-phrase "uv run" \
   --tag cg/fragment \
