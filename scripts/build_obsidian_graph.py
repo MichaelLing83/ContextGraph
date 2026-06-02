@@ -42,6 +42,9 @@ from agent_memory.vault.segmenter import segment_note
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+# Keep third-party HTTP client chatter out of progress output.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def _clear_generated_graph_outputs(graph_root: Path) -> None:
