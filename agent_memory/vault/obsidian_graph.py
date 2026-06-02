@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Literal, Optional
 
 from agent_memory.vault.models import RawVaultNote
+from agent_memory.vault.similarity import jaccard_similarity, tokenize
 
 if TYPE_CHECKING:
     from agent_memory.vault.fragment_summary import FragmentSummarizer
@@ -29,7 +30,6 @@ DEFAULT_GRAPH_DIR = "ContextGraph"
 LinkMode = Literal["stub", "symlink", "frontmatter"]
 RelatedMode = Literal["all", "none", "adjacent", "topk"]
 DEFAULT_RELATED_TOPK = 2
-_SEMANTIC_TOKEN_RE = re.compile(r"[\w\u4e00-\u9fff]+", re.UNICODE)
 
 
 def related_section_indices(
@@ -334,7 +334,7 @@ source_heading: "{_escape_yaml(sec.heading)}"
             summary = str(meta.get("cg_llm_summary") or "").strip()
             if not summary:
                 continue
-            tokens = set(_SEMANTIC_TOKEN_RE.findall(summary.lower()))
+            tokens = tokenize(summary)
             if not tokens:
                 continue
             items.append({"rel": rel, "path": path, "tokens": tokens, "text": text})
@@ -356,7 +356,7 @@ source_heading: "{_escape_yaml(sec.heading)}"
 
             scored: list[tuple[float, str]] = []
             for j in candidates:
-                sim = _jaccard_similarity(item["tokens"], items[j]["tokens"])
+                sim = jaccard_similarity(item["tokens"], items[j]["tokens"])
                 if sim >= min_similarity:
                     scored.append((sim, items[j]["rel"]))
             scored.sort(key=lambda x: (-x[0], x[1]))
@@ -512,15 +512,6 @@ def _slug_tag(text: str) -> str:
 
 def _escape_yaml(value: str) -> str:
     return value.replace('"', '\\"')
-
-
-def _jaccard_similarity(a: set[str], b: set[str]) -> float:
-    if not a or not b:
-        return 0.0
-    inter = len(a & b)
-    if inter == 0:
-        return 0.0
-    return inter / len(a | b)
 
 
 def _upsert_markdown_h2_section(text: str, section: str, body: str) -> str:

@@ -223,6 +223,48 @@ uv run python scripts/query_obsidian_graph.py \
 
 **Score reasons** (in default list mode): `tag_filter`, `title`, `body`, `exact_phrase:title`, `exact_phrase:body`, `link_expand`.
 
+### Passage query (virtual fragment)
+
+Treat a long passage as a **virtual fragment** (nothing is written to the vault):
+
+1. Optionally summarize the passage with the same LLM stack as build (`--llm-summary`).
+2. Score each `cg/fragment` by **semantic** similarity on `cg_llm_summary` (Jaccard) and **lexical** overlap on title/body.
+3. Take top seeds, expand one hop along `## Related` / `## Semantic` wikilinks (default `--hops 1` in passage mode).
+
+```bash
+uv run python scripts/query_obsidian_graph.py \
+  --vault ~/Vaults/MyNotesGraph \
+  --query-passage "How do I migrate from pip to uv in a monorepo?" \
+  --tag cg/fragment \
+  --hops 1 \
+  --llm-summary \
+  --llm-api-base http://localhost:11434/v1 \
+  --llm-api-key ollama \
+  --llm-summary-model llama3:latest
+```
+
+Or read from a file:
+
+```bash
+uv run python scripts/query_obsidian_graph.py \
+  --vault ~/Vaults/MyNotesGraph \
+  --query-passage-file ./question.md \
+  --tag cg/fragment --hops 1
+```
+
+| Flag | Description |
+|------|-------------|
+| `--query-passage` | Passage text (virtual fragment body) |
+| `--query-passage-file` | Read passage from file |
+| `--seed-topk` | Top semantic/lexical seeds before expansion (default 8) |
+| `--semantic-min` | Min summary Jaccard to record `semantic:*` reason (default 0.15) |
+| `--semantic-weight` / `--lexical-weight` | Fusion weights when both query and fragment have summaries (0.6 / 0.4) |
+| `--llm-summary` | Summarize passage before semantic match (cache: `.llm_summary_cache/<model>.json`) |
+
+**Passage score reasons**: `semantic:0.XX`, `lexical:0.XX`, `passage_seed`, `link_expand`, `link_neighbor`.
+
+Semantic matching works best when fragments were built with `--llm-summary`; without summaries, passage mode falls back to lexical overlap only.
+
 Exact phrase example:
 
 ```bash
@@ -319,6 +361,16 @@ builder.save_registry()
 index = ObsidianVaultIndex(builder.graph_vault)
 index.build()
 hits = index.search("topic", tags=["cg/fragment"], hops=1, limit=10)
+
+# Passage query (virtual fragment)
+from agent_memory.vault.passage_query import PassageQueryConfig, search_passage
+
+hits = search_passage(
+    index,
+    "long question text…",
+    query_summary="optional LLM summary",
+    config=PassageQueryConfig(hops=1, limit=10),
+)
 text = build_knowledge_summary("topic", hits, index)
 ```
 
@@ -334,7 +386,7 @@ See the main [README](../README.md) and `CLAUDE.md`.
 ## Tests
 
 ```bash
-uv run pytest tests/test_vault_parser.py tests/test_obsidian_graph.py tests/test_build_obsidian_graph.py tests/test_vault_summarize.py tests/test_fragment_summary.py -q
+uv run pytest tests/test_vault_parser.py tests/test_obsidian_graph.py tests/test_build_obsidian_graph.py tests/test_vault_summarize.py tests/test_fragment_summary.py tests/test_passage_query.py -q
 ```
 
 ## Troubleshooting

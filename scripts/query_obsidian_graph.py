@@ -8,6 +8,12 @@ Usage:
     uv run python scripts/query_obsidian_graph.py --vault ~/Notes -q "api" --tag cg/fragment --hops 1
     uv run python scripts/query_obsidian_graph.py --vault ~/Notes --tag cg/fragment --list-tags
 
+    # Passage query (virtual fragment): semantic + lexical match, then link expansion
+    uv run python scripts/query_obsidian_graph.py --vault ~/Graph \
+      --query-passage "How do I migrate from pip to uv?" \
+      --tag cg/fragment --hops 1 --llm-summary \
+      --llm-api-base http://localhost:11434/v1 --llm-api-key ollama --llm-summary-model llama3:latest
+
     # Merge hits into one knowledge summary (markdown)
     uv run python scripts/query_obsidian_graph.py --vault ~/Graph -q "utmärkt" --tag cg/fragment --summary
 """
@@ -16,17 +22,45 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from agent_memory.vault.obsidian_index import ObsidianVaultIndex
-from agent_memory.vault.summarize import (
+from agent_memory.vault.fragment_summary import (  # noqa: E402
+    DEFAULT_MODEL,
+    FragmentSummarizer,
+    FragmentSummaryCache,
+    cache_path_for_model,
+)
+from agent_memory.vault.obsidian_index import ObsidianVaultIndex  # noqa: E402
+from agent_memory.vault.passage_query import PassageQueryConfig, search_passage  # noqa: E402
+from agent_memory.vault.summarize import (  # noqa: E402
     _clean_body,
     build_knowledge_summary,
 )
+
+
+def _summarize_passage(
+    vault: Path,
+    passage: str,
+    *,
+    api_base: str,
+    api_key: str,
+    model: str,
+) -> str:
+    cache = FragmentSummaryCache(cache_path_for_model(vault, model))
+    summarizer = FragmentSummarizer(
+        api_base=api_base,
+        api_key=api_key,
+        model=model,
+        cache=cache,
+    )
+    first_line = next((ln.strip() for ln in passage.splitlines() if ln.strip()), "Query passage")
+    heading = first_line.lstrip("#").strip()[:120]
+    return summarizer.summarize(heading, passage) or ""
 
 
 def main() -> None:
@@ -37,7 +71,17 @@ def main() -> None:
         required=True,
         help="Vault to search (use your graph vault when using separate vaults)",
     )
-    parser.add_argument("-q", "--query", default="", help="Text query (optional if --tag set)")
+    parser.add_argument("-q", "--query", default="", help="Text query (classic search)")
+    parser.add_argument(
+        "--query-passage",
+        default="",
+        help="Long passage treated as a virtual fragment (semantic + lexical retrieval)",
+    )
+    parser.add_argument(
+        "--query-passage-file",
+        type=Path,
+        help="Read passage text from a file (combined with --query-passage if both set)",
+    )
     parser.add_argument(
         "--exact-phrase",
         default="",
@@ -58,9 +102,53 @@ def main() -> None:
         "--hops",
         type=int,
         default=0,
-        help="Expand results along wikilinks (0=off, 1=recommended)",
+        help="Expand results along wikilinks (0=off; use 1 with passage query)",
     )
     parser.add_argument("--limit", type=int, default=15)
+    parser.add_argument(
+        "--seed-topk",
+        type=int,
+        default=8,
+        help="Passage mode: number of top semantic/lexical seeds before link expansion",
+    )
+    parser.add_argument(
+        "--semantic-min",
+        type=float,
+        default=0.15,
+        help="Passage mode: minimum Jaccard on cg_llm_summary to tag semantic_match",
+    )
+    parser.add_argument(
+        "--semantic-weight",
+        type=float,
+        default=0.6,
+        help="Passage mode: weight for summary similarity when query and fragment have summaries",
+    )
+    parser.add_argument(
+        "--lexical-weight",
+        type=float,
+        default=0.4,
+        help="Passage mode: weight for token overlap on passage vs fragment body/title",
+    )
+    parser.add_argument(
+        "--llm-summary",
+        action="store_true",
+        help="Summarize --query-passage via LLM before semantic matching (uses vault cache)",
+    )
+    parser.add_argument(
+        "--llm-summary-model",
+        default=DEFAULT_MODEL,
+        help=f"LLM model for --llm-summary (default: {DEFAULT_MODEL})",
+    )
+    parser.add_argument(
+        "--llm-api-base",
+        default=os.environ.get("OPENAI_API_BASE", "http://localhost:4000/v1"),
+        help="OpenAI-compatible API base for --llm-summary",
+    )
+    parser.add_argument(
+        "--llm-api-key",
+        default=os.environ.get("LITELLM_MASTER_KEY", os.environ.get("OPENAI_API_KEY", "")),
+        help="API key for --llm-summary",
+    )
     parser.add_argument("--json", action="store_true", help="JSON output")
     parser.add_argument(
         "--list-tags",
@@ -86,7 +174,7 @@ def main() -> None:
         "--summary-max-chars",
         type=int,
         default=6000,
-        help="Max length of merged summary (default: 6000)",
+        help="Max length of merged summary (default: 6000; disabled with --full-body)",
     )
     parser.add_argument(
         "--summary-meta",
@@ -116,24 +204,70 @@ def main() -> None:
             print(f"{t} ({len(index.tag_to_notes[t])} notes)")
         return
 
-    if not args.query and not args.tag and not args.exact_phrase:
-        parser.error("Provide --query and/or --tag and/or --exact-phrase")
+    passage = args.query_passage.strip()
+    if args.query_passage_file:
+        passage = (
+            passage + "\n\n" if passage else ""
+        ) + args.query_passage_file.expanduser().read_text(encoding="utf-8")
+    passage = passage.strip()
 
-    hits = index.search(
-        args.query,
-        tags=args.tag or None,
-        tag_prefix=tag_prefix,
-        exact_phrase=args.exact_phrase,
-        hops=args.hops,
-        limit=args.limit,
-    )
+    use_passage = bool(passage)
+    if use_passage and args.llm_summary and not args.llm_api_key:
+        parser.error(
+            "Missing API key for --llm-summary "
+            "(set LITELLM_MASTER_KEY or OPENAI_API_KEY, or pass --llm-api-key)"
+        )
+
+    if not use_passage and not args.query and not args.tag and not args.exact_phrase:
+        parser.error(
+            "Provide --query and/or --tag and/or --exact-phrase, or --query-passage"
+        )
+
+    if use_passage:
+        query_summary = ""
+        if args.llm_summary:
+            query_summary = _summarize_passage(
+                vault,
+                passage,
+                api_base=args.llm_api_base,
+                api_key=args.llm_api_key,
+                model=args.llm_summary_model,
+            )
+        tags = args.tag or ["cg/fragment"]
+        hops = args.hops if args.hops > 0 else 1
+        cfg = PassageQueryConfig(
+            seed_topk=args.seed_topk,
+            semantic_min=args.semantic_min,
+            semantic_weight=args.semantic_weight,
+            lexical_weight=args.lexical_weight,
+            hops=hops,
+            limit=args.limit,
+            tags=tags,
+        )
+        hits = search_passage(
+            index,
+            passage,
+            query_summary=query_summary,
+            config=cfg,
+        )
+        summary_query = passage[:200]
+    else:
+        hits = index.search(
+            args.query,
+            tags=args.tag or None,
+            tag_prefix=tag_prefix,
+            exact_phrase=args.exact_phrase,
+            hops=args.hops,
+            limit=args.limit,
+        )
+        summary_query = args.query or args.exact_phrase
 
     if args.summary or args.summary_out:
         if not hits:
             print("No matches — nothing to summarize.")
             return
         text = build_knowledge_summary(
-            args.query or args.exact_phrase,
+            summary_query,
             hits,
             index,
             max_chars=0 if args.full_body else args.summary_max_chars,
@@ -156,6 +290,7 @@ def main() -> None:
                 "reasons": h.reasons,
                 "tags": sorted(h.tags),
                 "snippet": h.snippet,
+                "linked_from": h.linked_from,
             }
             if args.full_body:
                 note = index.notes.get(h.rel_path)
@@ -175,7 +310,8 @@ def main() -> None:
         print("No matches.")
         return
 
-    print(f"Indexed {n} notes — top {len(hits)} hits\n")
+    mode = "passage" if use_passage else "keyword"
+    print(f"Indexed {n} notes — top {len(hits)} hits ({mode})\n")
     for i, h in enumerate(hits, 1):
         tag_str = " ".join(f"#{t}" for t in sorted(h.tags)[:6])
         print(f"{i}. {h.title}")
