@@ -21,10 +21,11 @@ Recommended layout: **two vaults**.
 ├── MyNotes/              # source — your normal Obsidian library (read-only for the tool)
 └── MyNotesGraph/         # graph — generated knowledge graph only
     ├── MOC.md
-    ├── Fragments/
-    ├── Sources/          # index cards pointing back to source notes
+    ├── Fragments/        # graph nodes (default build)
     └── .graph_registry.json
 ```
+
+By default the graph vault contains **fragment notes only** — no `Sources/` index cards and no source wikilinks in Graph view. Each fragment records the original path in YAML frontmatter (`source_vault`, `source_rel_path`, `source_heading`) and carries a `#cg/source/...` tag for grouping.
 
 Open both libraries in Obsidian: browse the graph in **Graph view**, filter with **tags**, follow **backlinks**.
 
@@ -49,9 +50,9 @@ Options:
 
 | Flag | Description |
 |------|-------------|
-| `--link-mode stub` | (default) One `Sources/*.md` card per source note; fragments link with `[[Sources/...]]` |
+| `--link-mode frontmatter` | **(default)** Source path in YAML only — **no `Sources/` notes, no source wikilinks**; Graph view shows fragment nodes only |
+| `--link-mode stub` | One `Sources/*.md` card per source note; fragments link with `[[Sources/...]]` (adds source nodes to Graph view) |
 | `--link-mode symlink` | `Sources/` → symlink to source vault; links like `[[Sources/Projects/Note]]` |
-| `--link-mode frontmatter` | Paths only in YAML, no source wikilinks in the graph |
 | `--max-notes N` | Ingest only the first N files (testing) |
 | `--chunk-mode heading` | One fragment per markdown heading (default) |
 | `--chunk-mode chapter` | One fragment per source note |
@@ -296,4 +297,4 @@ uv run pytest tests/test_vault_parser.py tests/test_obsidian_graph.py tests/test
 
 **Summary truncated** — Increase `--summary-max-chars` and/or `--limit`.
 
-**Cross-vault links in Obsidian** — With `stub` mode, open the source path from the `Sources/` card or frontmatter `source_rel_path`.
+**Cross-vault links in Obsidian** — Default (`frontmatter`): open the source note from frontmatter `source_vault` + `source_rel_path` (or the path line under `## Graph`). With `--link-mode stub`, you can also follow `[[Sources/...]]` index cards.

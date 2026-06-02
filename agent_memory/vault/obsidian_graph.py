@@ -71,9 +71,10 @@ class ObsidianGraphBuilder:
       2. **Embedded**: single vault with nodes under ``graph_dir/`` (default ``ContextGraph/``).
 
     Cross-vault links to originals:
-      - ``stub`` (default): one ``Sources/*.md`` card per source note; fragments wikilink to it.
+      - ``frontmatter`` (default): source path in YAML only; no ``Sources/`` notes or source wikilinks
+        (Graph view shows fragment nodes only).
+      - ``stub``: one ``Sources/*.md`` card per source note; fragments wikilink to it.
       - ``symlink``: ``Sources/`` → source vault directory (wikilinks like ``[[Sources/Projects/Note]]``).
-      - ``frontmatter``: only YAML paths, no wikilink to source (for minimal graph vaults).
     """
 
     def __init__(
@@ -82,7 +83,7 @@ class ObsidianGraphBuilder:
         *,
         source_vault: Optional[Path] = None,
         graph_dir: str = "",
-        link_mode: LinkMode = "stub",
+        link_mode: LinkMode = "frontmatter",
         chunk_mode: ChunkMode = "heading",
         fragment_chars: int = 500,
         fragment_max_chars: int = 3000,
@@ -283,7 +284,7 @@ tags:
                 "## Browse by tag",
                 "",
                 "- `#cg/fragment` — section-level chunks",
-                "- `#cg/source` — source index cards (separate-vault mode)",
+                "- `#cg/source/...` — group fragments by source note (tag on fragments)",
                 "- `#cg/moc` — this index",
                 "",
                 "## Search",

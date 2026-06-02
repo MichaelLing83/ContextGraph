@@ -8,7 +8,7 @@ Separate source and graph vaults:
 
 Usage:
     uv run python scripts/build_obsidian_graph.py --source-vault ~/Notes --graph-vault ~/NotesGraph
-    uv run python scripts/build_obsidian_graph.py --source-vault ~/Notes --graph-vault ~/NotesGraph --link-mode symlink
+    uv run python scripts/build_obsidian_graph.py --source-vault ~/Notes --graph-vault ~/NotesGraph --link-mode stub
 """
 
 from __future__ import annotations
@@ -57,9 +57,15 @@ def main() -> None:
     )
     parser.add_argument(
         "--link-mode",
-        choices=("stub", "symlink", "frontmatter"),
-        default="stub",
-        help="How fragments link back to source vault (default: stub index cards)",
+        choices=("frontmatter", "stub", "symlink"),
+        default="frontmatter",
+        help=(
+            "How fragments reference the source vault (default: frontmatter). "
+            "frontmatter: YAML paths only — no Sources/ notes or source wikilinks "
+            "(Graph view: fragment nodes only). "
+            "stub: create Sources/*.md index cards with wikilinks. "
+            "symlink: Sources/ symlink to source vault with wikilinks."
+        ),
     )
     parser.add_argument("--max-notes", type=int, default=0)
     parser.add_argument("--glob", default="**/*.md")

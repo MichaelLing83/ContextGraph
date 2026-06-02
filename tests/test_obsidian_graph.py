@@ -68,7 +68,40 @@ def test_build_graph_embedded_subfolder(tmp_path: Path):
     assert any("cache" in h.snippet.lower() or "Cache" in h.title for h in hits)
 
 
-def test_build_graph_separate_vaults(tmp_path: Path):
+def test_build_graph_separate_vaults_frontmatter_default(tmp_path: Path):
+    """Default link_mode is frontmatter: no Sources/ stubs or source wikilinks."""
+    source = tmp_path / "SourceVault"
+    graph = tmp_path / "GraphVault"
+    source.mkdir()
+    graph.mkdir()
+    note = source / "Projects" / "My Idea.md"
+    note.parent.mkdir(parents=True)
+    note.write_text(
+        "# My Idea\n\n## Alpha\n\nFirst.\n\n## Beta\n\nSecond.\n",
+        encoding="utf-8",
+    )
+
+    raw = parse_vault_note(note, source)
+    builder = ObsidianGraphBuilder(graph, source_vault=source)
+    builder.ingest_note(raw)
+    builder.write_moc()
+
+    assert (graph / "MOC.md").is_file()
+    assert (graph / "Fragments").is_dir()
+    assert not (graph / "Sources").exists()
+
+    frag = next((graph / "Fragments").glob("*.md"))
+    text = frag.read_text(encoding="utf-8")
+    assert "source_vault:" in text
+    assert "source_rel_path:" in text
+    assert "[[Sources/" not in text
+    assert "cg/source/" in text
+
+    moc = (graph / "MOC.md").read_text(encoding="utf-8")
+    assert "[[Sources/" not in moc
+
+
+def test_build_graph_separate_vaults_stub(tmp_path: Path):
     source = tmp_path / "SourceVault"
     graph = tmp_path / "GraphVault"
     source.mkdir()
