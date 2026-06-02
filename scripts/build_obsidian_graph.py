@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -27,6 +28,12 @@ from agent_memory.vault import iter_vault_notes
 from agent_memory.vault.graph_stats import (
     compute_graph_vault_stats,
     format_graph_stats,
+)
+from agent_memory.vault.fragment_summary import (
+    CACHE_FILENAME,
+    DEFAULT_MODEL,
+    FragmentSummarizer,
+    FragmentSummaryCache,
 )
 from agent_memory.vault.obsidian_graph import ObsidianGraphBuilder
 
@@ -106,6 +113,29 @@ def main() -> None:
             "nearest in document order (default: 2)"
         ),
     )
+    parser.add_argument(
+        "--llm-summary",
+        action="store_true",
+        help=(
+            "Generate cg_llm_summary in fragment frontmatter via LLM "
+            "(cached by body hash in .llm_summary_cache.json)"
+        ),
+    )
+    parser.add_argument(
+        "--llm-summary-model",
+        default=DEFAULT_MODEL,
+        help=f"LLM model for --llm-summary (default: {DEFAULT_MODEL})",
+    )
+    parser.add_argument(
+        "--llm-api-base",
+        default=os.environ.get("OPENAI_API_BASE", "http://localhost:4000/v1"),
+        help="OpenAI-compatible API base URL for --llm-summary",
+    )
+    parser.add_argument(
+        "--llm-api-key",
+        default=os.environ.get("LITELLM_MASTER_KEY", os.environ.get("OPENAI_API_KEY", "")),
+        help="API key for --llm-summary (LITELLM_MASTER_KEY or OPENAI_API_KEY)",
+    )
     args = parser.parse_args()
 
     source_vault = args.source_vault.expanduser().resolve()
@@ -119,6 +149,14 @@ def main() -> None:
     graph_vault.mkdir(parents=True, exist_ok=True)
 
     max_notes = args.max_notes if args.max_notes > 0 else None
+
+    if args.llm_summary and not args.llm_api_key:
+        logger.error(
+            "Missing API key for --llm-summary "
+            "(set LITELLM_MASTER_KEY or OPENAI_API_KEY, or pass --llm-api-key)"
+        )
+        sys.exit(1)
+
     builder = ObsidianGraphBuilder(
         graph_vault,
         source_vault=source_vault,
@@ -130,6 +168,17 @@ def main() -> None:
         related_mode=args.related_mode,
         related_topk=args.related_topk,
     )
+
+    if args.llm_summary:
+        summary_cache = FragmentSummaryCache(builder.graph_root / CACHE_FILENAME)
+        summary_cache.load()
+        builder.summarizer = FragmentSummarizer(
+            api_base=args.llm_api_base,
+            api_key=args.llm_api_key,
+            model=args.llm_summary_model,
+            cache=summary_cache,
+        )
+
     builder.load_registry()
     builder.setup_cross_vault_links()
 
@@ -147,6 +196,8 @@ def main() -> None:
 
     moc = builder.write_moc()
     builder.save_registry()
+    if args.llm_summary and builder.summarizer is not None:
+        builder.summarizer.cache.save()
 
     graph_stats = compute_graph_vault_stats(
         graph_vault, graph_root=builder.graph_root
@@ -163,12 +214,18 @@ def main() -> None:
         "preserve_markup": True,
         "related_mode": args.related_mode,
         "related_topk": args.related_topk,
+        "llm_summary": args.llm_summary,
         "notes_ingested": ingested,
         "errors": errors[:20],
         "moc": str(moc.relative_to(graph_vault)),
         "elapsed_sec": round(time.time() - start, 2),
         "graph_stats": graph_stats.to_dict(),
     }
+    if args.llm_summary and builder.summarizer is not None:
+        report["llm_summary_stats"] = builder.summarizer.stats.to_dict()
+        report["llm_summary_cache"] = str(
+            (builder.graph_root / CACHE_FILENAME).relative_to(graph_vault)
+        )
     out = builder.graph_root / "build_report.json"
     out.write_text(json.dumps(report, indent=2), encoding="utf-8")
     logger.info("Build finished in %.1fs — %d source notes ingested", report["elapsed_sec"], ingested)

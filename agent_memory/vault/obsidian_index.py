@@ -81,7 +81,8 @@ class ObsidianVaultIndex:
         tags = set(meta.get("tags") or [])
         tags |= parse_frontmatter_tags(_frontmatter_raw(text) or "")
         tags |= extract_inline_tags(body)
-        tokens = set(_TOKEN_RE.findall(f"{title} {body}".lower()))
+        llm_summary = str(meta.get("cg_llm_summary") or "")
+        tokens = set(_TOKEN_RE.findall(f"{title} {body} {llm_summary}".lower()))
 
         note = IndexedNote(
             path=path,

@@ -61,6 +61,23 @@ Options:
 | `--fragment-max-chars 3000` | Cap per fragment; longer pieces split on `\\n\\n` paragraphs (default 3000; `0`=off) |
 | `--related-mode all` | Sibling links in each fragment’s `## Related` section (see below) |
 | `--related-topk 2` | With `topk` mode: max links per fragment (default **2**) |
+| `--llm-summary` | Generate `cg_llm_summary` in fragment frontmatter via LLM (optional) |
+| `--llm-summary-model` | Model for `--llm-summary` (default: `claude-sonnet-4-20250514`) |
+
+### LLM fragment summaries (`--llm-summary`)
+
+When enabled, each fragment gets a **`cg_llm_summary`** field in YAML frontmatter. The **original chunk stays in the note body** — query output and `--full-body` are unchanged.
+
+Summaries are **cached by SHA-256 of the fragment body** in `.llm_summary_cache.json` at the graph vault root. Rebuild skips the LLM when the source chunk text is identical (even if the fragment file was recreated). Cache also keys on model and prompt version.
+
+```bash
+uv run python scripts/build_obsidian_graph.py \
+  --source-vault ~/Vaults/MyNotes \
+  --graph-vault ~/Vaults/MyNotesGraph \
+  --llm-summary
+```
+
+Requires `LITELLM_MASTER_KEY` or `OPENAI_API_KEY` (LiteLLM proxy at `http://localhost:4000/v1` by default). `build_report.json` includes `llm_summary_stats` (`cache_hits`, `llm_calls`, …).
 
 ### Sibling fragment links (`--related-mode`)
 

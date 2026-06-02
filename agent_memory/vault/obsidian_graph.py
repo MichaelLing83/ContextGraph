@@ -7,9 +7,12 @@ import logging
 import os
 import uuid
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import TYPE_CHECKING, List, Literal, Optional
 
 from agent_memory.vault.models import RawVaultNote
+
+if TYPE_CHECKING:
+    from agent_memory.vault.fragment_summary import FragmentSummarizer
 from agent_memory.vault.segmenter import ChunkMode, segment_note
 from agent_memory.vault.wikilinks import (
     note_title_to_filename,
@@ -90,6 +93,7 @@ class ObsidianGraphBuilder:
         preserve_markup: bool = True,
         related_mode: RelatedMode = "all",
         related_topk: int = DEFAULT_RELATED_TOPK,
+        summarizer: Optional["FragmentSummarizer"] = None,
     ):
         self.graph_vault = graph_vault.resolve()
         self.source_vault = (source_vault or graph_vault).resolve()
@@ -101,6 +105,7 @@ class ObsidianGraphBuilder:
         self.preserve_markup = preserve_markup
         self.related_mode = related_mode
         self.related_topk = related_topk
+        self.summarizer = summarizer
 
         if graph_dir:
             self.graph_root = self.graph_vault / graph_dir
@@ -199,6 +204,11 @@ class ObsidianGraphBuilder:
                 from_rel=rel,
             )
             graph_section = self._graph_section(note, sec.heading, source_ref)
+            llm_summary = ""
+            if self.summarizer is not None:
+                summary = self.summarizer.summarize(sec.heading, sec.body)
+                if summary:
+                    llm_summary = f'cg_llm_summary: "{_escape_yaml(summary)}"\n'
 
             content = f"""---
 cg_type: fragment
@@ -206,7 +216,7 @@ cg_id: {frag_id}
 source_vault: "{self.source_vault}"
 source_rel_path: "{note.rel_path}"
 source_heading: "{_escape_yaml(sec.heading)}"
-tags:
+{llm_summary}tags:
 {tags_yaml}
 ---
 
