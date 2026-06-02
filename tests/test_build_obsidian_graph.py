@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from scripts.build_obsidian_graph import _clear_generated_graph_outputs
+from scripts.build_obsidian_graph import _clear_generated_graph_outputs, _format_progress
 
 
 def _write(path: Path, text: str = "x") -> None:
@@ -30,3 +30,8 @@ def test_clear_generated_outputs_keeps_llm_cache(tmp_path: Path):
     assert (graph_root / ".llm_summary_cache" / "model.json").is_file()
     # Unrelated user content should not be touched.
     assert (graph_root / "notes" / "keep.md").is_file()
+
+
+def test_format_progress_bar():
+    text = _format_progress(50, 100, width=10)
+    assert "[#####.....] 50/100 ( 50.0%)" == text

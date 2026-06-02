@@ -65,7 +65,7 @@ Options:
 | `--related-mode all` | Sibling links in each fragment’s `## Related` section (see below) |
 | `--related-topk 2` | With `topk` mode: max links per fragment (default **2**) |
 | `--llm-summary` | Generate `cg_llm_summary` in fragment frontmatter via LLM (optional) |
-| `--llm-summary-model` | Model for `--llm-summary` (default: `claude-sonnet-4-20250514`) |
+| `--llm-summary-model` | Model for `--llm-summary` (default: `claude-sonnet-4-20250514`; recommended local default: `qwen3.5:4b` with Ollama) |
 
 ### LLM fragment summaries (`--llm-summary`)
 
@@ -83,6 +83,7 @@ uv run python scripts/build_obsidian_graph.py \
 ```
 
 Requires `LITELLM_MASTER_KEY` or `OPENAI_API_KEY` (LiteLLM proxy at `http://localhost:4000/v1` by default). `build_report.json` includes `llm_summary_stats` (`cache_hits`, `llm_calls`, …).
+When `--llm-summary` is enabled, build logs print progress (`processed/total fragments`, cache hits, LLM calls, failures).
 
 Use a different model (and therefore a different cache file):
 
@@ -92,6 +93,18 @@ uv run python scripts/build_obsidian_graph.py \
   --graph-vault ~/Vaults/MyNotesGraph \
   --llm-summary \
   --llm-summary-model claude-sonnet-4-20250514
+```
+
+Ollama local model example (recommended default for local summarization):
+
+```bash
+uv run python scripts/build_obsidian_graph.py \
+  --source-vault ~/Vaults/MyNotes \
+  --graph-vault ~/Vaults/MyNotesGraph \
+  --llm-summary \
+  --llm-summary-model qwen3.5:4b \
+  --llm-api-base http://localhost:11434/v1 \
+  --llm-api-key ollama
 ```
 
 ### Sibling fragment links (`--related-mode`)

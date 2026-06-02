@@ -26,6 +26,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from agent_memory.vault import iter_vault_notes
+from agent_memory.vault.models import RawVaultNote
 from agent_memory.vault.graph_stats import (
     compute_graph_vault_stats,
     format_graph_stats,
@@ -37,6 +38,7 @@ from agent_memory.vault.fragment_summary import (
     cache_path_for_model,
 )
 from agent_memory.vault.obsidian_graph import ObsidianGraphBuilder
+from agent_memory.vault.segmenter import segment_note
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -67,6 +69,28 @@ def _clear_generated_graph_outputs(graph_root: Path) -> None:
             removed,
             graph_root,
         )
+
+
+def _count_note_fragments(note: RawVaultNote, builder: ObsidianGraphBuilder) -> int:
+    sections = segment_note(
+        note,
+        mode=builder.chunk_mode,
+        target_chars=builder.fragment_chars,
+        max_fragment_chars=builder.fragment_max_chars,
+        preserve_markup=builder.preserve_markup,
+    )
+    if not sections and note.body.strip():
+        return 1
+    return len(sections)
+
+
+def _format_progress(done: int, total: int, width: int = 24) -> str:
+    if total <= 0:
+        return f"{done}/?"
+    ratio = min(1.0, max(0.0, done / total))
+    filled = int(width * ratio)
+    bar = "#" * filled + "." * (width - filled)
+    return f"[{bar}] {done}/{total} ({ratio * 100:5.1f}%)"
 
 
 def main() -> None:
@@ -215,14 +239,51 @@ def main() -> None:
     builder.load_registry()
     builder.setup_cross_vault_links()
 
+    notes = list(iter_vault_notes(source_vault, glob=args.glob, max_notes=max_notes))
+    estimated_fragments = 0
+    if args.llm_summary:
+        estimated_fragments = sum(_count_note_fragments(n, builder) for n in notes)
+        logger.info(
+            "LLM summary enabled: %d notes, %d fragments estimated (model=%s)",
+            len(notes),
+            estimated_fragments,
+            args.llm_summary_model,
+        )
+        logger.info(
+            "Summary cache: %s",
+            cache_path_for_model(builder.graph_root, args.llm_summary_model),
+        )
+
     ingested = 0
     errors: list[str] = []
     start = time.time()
+    fragments_done = 0
+    last_progress_fragments = 0
+    last_progress_time = start
 
-    for note in iter_vault_notes(source_vault, glob=args.glob, max_notes=max_notes):
+    for note in notes:
         try:
-            builder.ingest_note(note)
+            fragment_paths = builder.ingest_note(note)
             ingested += 1
+            if args.llm_summary and builder.summarizer is not None:
+                fragments_done += len(fragment_paths)
+                now = time.time()
+                should_log = (
+                    fragments_done == estimated_fragments
+                    or (fragments_done - last_progress_fragments) >= 25
+                    or (now - last_progress_time) >= 5.0
+                )
+                if should_log:
+                    s = builder.summarizer.stats
+                    logger.info(
+                        "LLM summary progress %s | calls=%d cache_hits=%d failures=%d",
+                        _format_progress(fragments_done, estimated_fragments),
+                        s.llm_calls,
+                        s.cache_hits,
+                        s.failures,
+                    )
+                    last_progress_fragments = fragments_done
+                    last_progress_time = now
         except Exception as e:
             errors.append(f"{note.rel_path}: {e}")
             logger.warning("Failed %s: %s", note.rel_path, e)
@@ -264,6 +325,15 @@ def main() -> None:
     out = builder.graph_root / "build_report.json"
     out.write_text(json.dumps(report, indent=2), encoding="utf-8")
     logger.info("Build finished in %.1fs — %d source notes ingested", report["elapsed_sec"], ingested)
+    if args.llm_summary and builder.summarizer is not None:
+        s = builder.summarizer.stats
+        logger.info(
+            "LLM summary done: calls=%d cache_hits=%d skipped_empty=%d failures=%d",
+            s.llm_calls,
+            s.cache_hits,
+            s.skipped_empty,
+            s.failures,
+        )
     print(format_graph_stats(graph_stats))
     if errors:
         logger.warning("%d ingest errors (see build_report.json)", len(errors))
