@@ -78,7 +78,11 @@ if $DRY_RUN; then
 fi
 
 echo "==> Building Obsidian release (repo: ${REPO})"
-uv run python scripts/release_obsidian_graph.py "${PY_ARGS[@]}"
+if ((${#PY_ARGS[@]})); then
+    uv run python scripts/release_obsidian_graph.py "${PY_ARGS[@]}"
+else
+    uv run python scripts/release_obsidian_graph.py
+fi
 
 if $DRY_RUN; then
     if $NO_BUMP; then
