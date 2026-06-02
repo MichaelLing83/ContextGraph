@@ -108,6 +108,40 @@ uv run python scripts/build_obsidian_graph.py \
 
 After build, check `MyNotesGraph/MOC.md` and `build_report.json` (includes `graph_stats`: fragment count, body length min/mean/median/max, wikilink edge counts). The CLI also prints a short summary to the terminal.
 
+### Release (tarball + wheel + GitHub)
+
+Package only the Obsidian pipeline sources into a versioned release (auto-bumps patch in `releases/obsidian/VERSION`, e.g. `0.1.0` → `0.1.1`) and publish to GitHub Releases:
+
+```bash
+./scripts/release_obsidian_graph.sh
+./scripts/release_obsidian_graph.sh --dry-run
+./scripts/release_obsidian_graph.sh --no-bump --no-publish
+./scripts/release_obsidian_graph.sh --draft
+```
+
+Low-level build only (no `gh`):
+
+```bash
+uv run python scripts/release_obsidian_graph.py
+uv run python scripts/release_obsidian_graph.py --dry-run
+uv run python scripts/release_obsidian_graph.py --no-bump
+```
+
+Output:
+
+- `dist/obsidian-context-graph-<version>.tar.gz` — full source bundle (scripts, tests, docs)
+- `dist/obsidian_context_graph-<version>-py3-none-any.whl` — installable Python wheel
+- `dist/obsidian-context-graph-<version>.tar.manifest.json` — checksums
+- GitHub Release tag: `obsidian-v<version>` (e.g. `obsidian-v0.1.1`)
+
+Install from wheel:
+
+```bash
+uv pip install obsidian_context_graph-<version>-py3-none-any.whl
+build-obsidian-graph --help
+query-obsidian-vault --help
+```
+
 ## 2. Search
 
 ```bash
