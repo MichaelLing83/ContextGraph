@@ -46,6 +46,9 @@ uv run python scripts/build_obsidian_graph.py \
   --graph-vault ~/Vaults/MyNotesGraph
 ```
 
+Build runs in **refresh mode**: if the target graph vault already exists, the script clears previously generated `Fragments/`, `Sources/`, `MOC.md`, `.graph_registry.json`, and `build_report.json` before rebuilding.  
+LLM summary caches under `.llm_summary_cache/` are preserved.
+
 Options:
 
 | Flag | Description |
@@ -68,7 +71,9 @@ Options:
 
 When enabled, each fragment gets a **`cg_llm_summary`** field in YAML frontmatter. The **original chunk stays in the note body** — query output and `--full-body` are unchanged.
 
-Summaries are **cached by SHA-256 of the fragment body** in `.llm_summary_cache.json` at the graph vault root. Rebuild skips the LLM when the source chunk text is identical (even if the fragment file was recreated). Cache also keys on model and prompt version.
+Summaries are **cached by SHA-256 of the fragment body** under `.llm_summary_cache/` in the graph vault.  
+Each model writes to a separate file: `.llm_summary_cache/<model>.json` (sanitized filename).  
+Rebuild skips the LLM when the source chunk text is identical (even if the fragment file was recreated). Cache also keys on prompt version.
 
 ```bash
 uv run python scripts/build_obsidian_graph.py \
@@ -78,6 +83,16 @@ uv run python scripts/build_obsidian_graph.py \
 ```
 
 Requires `LITELLM_MASTER_KEY` or `OPENAI_API_KEY` (LiteLLM proxy at `http://localhost:4000/v1` by default). `build_report.json` includes `llm_summary_stats` (`cache_hits`, `llm_calls`, …).
+
+Use a different model (and therefore a different cache file):
+
+```bash
+uv run python scripts/build_obsidian_graph.py \
+  --source-vault ~/Vaults/MyNotes \
+  --graph-vault ~/Vaults/MyNotesGraph \
+  --llm-summary \
+  --llm-summary-model claude-sonnet-4-20250514
+```
 
 ### Sibling fragment links (`--related-mode`)
 
@@ -303,7 +318,7 @@ See the main [README](../README.md) and `CLAUDE.md`.
 ## Tests
 
 ```bash
-uv run pytest tests/test_vault_parser.py tests/test_obsidian_graph.py tests/test_vault_summarize.py -q
+uv run pytest tests/test_vault_parser.py tests/test_obsidian_graph.py tests/test_build_obsidian_graph.py tests/test_vault_summarize.py tests/test_fragment_summary.py -q
 ```
 
 ## Troubleshooting

@@ -17,6 +17,7 @@ import argparse
 import json
 import logging
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -30,15 +31,42 @@ from agent_memory.vault.graph_stats import (
     format_graph_stats,
 )
 from agent_memory.vault.fragment_summary import (
-    CACHE_FILENAME,
     DEFAULT_MODEL,
     FragmentSummarizer,
     FragmentSummaryCache,
+    cache_path_for_model,
 )
 from agent_memory.vault.obsidian_graph import ObsidianGraphBuilder
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
+
+def _clear_generated_graph_outputs(graph_root: Path) -> None:
+    """Remove previously generated graph artifacts while keeping summary cache."""
+    if not graph_root.exists():
+        return
+    targets = [
+        graph_root / "Fragments",
+        graph_root / "Sources",
+        graph_root / "MOC.md",
+        graph_root / ".graph_registry.json",
+        graph_root / "build_report.json",
+    ]
+    removed = 0
+    for path in targets:
+        if path.is_symlink() or path.is_file():
+            path.unlink(missing_ok=True)
+            removed += 1
+        elif path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+            removed += 1
+    if removed:
+        logger.info(
+            "Cleared %d previous generated graph outputs under %s",
+            removed,
+            graph_root,
+        )
 
 
 def main() -> None:
@@ -118,7 +146,7 @@ def main() -> None:
         action="store_true",
         help=(
             "Generate cg_llm_summary in fragment frontmatter via LLM "
-            "(cached by body hash in .llm_summary_cache.json)"
+            "(cached by body hash in .llm_summary_cache/<model>.json)"
         ),
     )
     parser.add_argument(
@@ -168,9 +196,14 @@ def main() -> None:
         related_mode=args.related_mode,
         related_topk=args.related_topk,
     )
+    _clear_generated_graph_outputs(builder.graph_root)
 
     if args.llm_summary:
-        summary_cache = FragmentSummaryCache(builder.graph_root / CACHE_FILENAME)
+        summary_cache_path = cache_path_for_model(
+            builder.graph_root,
+            args.llm_summary_model,
+        )
+        summary_cache = FragmentSummaryCache(summary_cache_path)
         summary_cache.load()
         builder.summarizer = FragmentSummarizer(
             api_base=args.llm_api_base,
@@ -224,7 +257,9 @@ def main() -> None:
     if args.llm_summary and builder.summarizer is not None:
         report["llm_summary_stats"] = builder.summarizer.stats.to_dict()
         report["llm_summary_cache"] = str(
-            (builder.graph_root / CACHE_FILENAME).relative_to(graph_vault)
+            cache_path_for_model(builder.graph_root, args.llm_summary_model).relative_to(
+                graph_vault
+            )
         )
     out = builder.graph_root / "build_report.json"
     out.write_text(json.dumps(report, indent=2), encoding="utf-8")

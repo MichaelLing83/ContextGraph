@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 CACHE_VERSION = 1
 PROMPT_VERSION = "1"
-CACHE_FILENAME = ".llm_summary_cache.json"
+CACHE_DIRNAME = ".llm_summary_cache"
 DEFAULT_MODEL = "claude-sonnet-4-20250514"
 MAX_BODY_CHARS = 4000
 
@@ -32,6 +33,16 @@ Content:
 def fragment_body_hash(body: str) -> str:
     """Stable SHA-256 of fragment source body (the markdown chunk, not the whole note file)."""
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def _model_slug(model: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9._-]+", "-", model).strip("-").lower()
+    return slug or "default"
+
+
+def cache_path_for_model(cache_root: Path, model: str) -> Path:
+    """Model-scoped cache file path under ``.llm_summary_cache/``."""
+    return cache_root / CACHE_DIRNAME / f"{_model_slug(model)}.json"
 
 
 @dataclass
