@@ -224,6 +224,57 @@ def test_related_mode_adjacent_on_build(tmp_path: Path):
     assert related.count("- [[") == 2
 
 
+def test_semantic_links_built_from_cg_llm_summary(tmp_path: Path):
+    source = tmp_path / "Source"
+    graph = tmp_path / "Graph"
+    source.mkdir()
+    graph.mkdir()
+
+    class DummySummarizer:
+        def summarize(self, heading, body):
+            if "cache" in body.lower():
+                return "Cache invalidation strategy for dependency updates."
+            if "update" in body.lower():
+                return "Dependency update strategy uses cache invalidation."
+            return "Completely different topic."
+
+    (source / "A.md").write_text(
+        "# A\n\nCache strategy section.\n",
+        encoding="utf-8",
+    )
+    (source / "B.md").write_text(
+        "# B\n\nUpdate flow section.\n",
+        encoding="utf-8",
+    )
+    (source / "C.md").write_text(
+        "# C\n\n## Unrelated\n\nThree.\n",
+        encoding="utf-8",
+    )
+
+    builder = ObsidianGraphBuilder(
+        graph,
+        source_vault=source,
+        summarizer=DummySummarizer(),
+        chunk_mode="chapter",
+    )
+    for p in sorted(source.glob("*.md")):
+        builder.ingest_note(parse_vault_note(p, source))
+
+    written = builder.build_semantic_links_from_summaries(topk=1, min_similarity=0.2)
+    assert written == 3
+
+    a = (graph / "Fragments" / "A--A.md").read_text(encoding="utf-8")
+    b = (graph / "Fragments" / "B--B.md").read_text(encoding="utf-8")
+    c = (graph / "Fragments" / "C--C.md").read_text(encoding="utf-8")
+
+    assert "## Semantic" in a
+    assert "[[B--B]]" in a
+    assert "## Semantic" in b
+    assert "[[A--A]]" in b
+    assert "## Semantic" in c
+    assert "_None._" in c.split("## Semantic", 1)[1]
+
+
 def test_wikilink_short_same_folder():
     assert (
         wikilink_for_path(

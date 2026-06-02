@@ -311,6 +311,14 @@ def main() -> None:
     if fragment_bar is not None:
         fragment_bar.close()
 
+    semantic_notes = 0
+    if args.llm_summary:
+        semantic_notes = builder.build_semantic_links_from_summaries()
+        logger.info(
+            "Semantic links from cg_llm_summary written for %d fragment notes",
+            semantic_notes,
+        )
+
     moc = builder.write_moc()
     builder.save_registry()
     if args.llm_summary and builder.summarizer is not None:
@@ -332,6 +340,7 @@ def main() -> None:
         "related_mode": args.related_mode,
         "related_topk": args.related_topk,
         "llm_summary": args.llm_summary,
+        "semantic_links_from_summary_notes": semantic_notes,
         "notes_ingested": ingested,
         "errors": errors[:20],
         "moc": str(moc.relative_to(graph_vault)),

@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import uuid
+from collections import defaultdict
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Literal, Optional
+from typing import TYPE_CHECKING, Dict, List, Literal, Optional
 
 from agent_memory.vault.models import RawVaultNote
 
@@ -16,6 +18,7 @@ if TYPE_CHECKING:
 from agent_memory.vault.segmenter import ChunkMode, segment_note
 from agent_memory.vault.wikilinks import (
     note_title_to_filename,
+    split_frontmatter,
     source_rel_to_stub_stem,
     wikilink_for_path,
 )
@@ -26,6 +29,7 @@ DEFAULT_GRAPH_DIR = "ContextGraph"
 LinkMode = Literal["stub", "symlink", "frontmatter"]
 RelatedMode = Literal["all", "none", "adjacent", "topk"]
 DEFAULT_RELATED_TOPK = 2
+_SEMANTIC_TOKEN_RE = re.compile(r"[\w\u4e00-\u9fff]+", re.UNICODE)
 
 
 def related_section_indices(
@@ -309,6 +313,69 @@ source_heading: "{_escape_yaml(sec.heading)}"
         moc_path.write_text("\n".join(lines), encoding="utf-8")
         return moc_path
 
+    def build_semantic_links_from_summaries(
+        self, *, topk: int = 3, min_similarity: float = 0.2
+    ) -> int:
+        """
+        Add ``## Semantic`` wikilinks using cg_llm_summary similarity.
+
+        Returns the number of fragment notes whose semantic section was written.
+        """
+        if topk < 1:
+            return 0
+        fragment_rels = sorted(self._registry.get("fragments", {}).keys())
+        items: list[dict] = []
+        for rel in fragment_rels:
+            path = self.graph_vault / rel
+            if not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8")
+            meta, _ = split_frontmatter(text)
+            summary = str(meta.get("cg_llm_summary") or "").strip()
+            if not summary:
+                continue
+            tokens = set(_SEMANTIC_TOKEN_RE.findall(summary.lower()))
+            if not tokens:
+                continue
+            items.append({"rel": rel, "path": path, "tokens": tokens, "text": text})
+
+        if len(items) < 2:
+            return 0
+
+        token_to_ids: Dict[str, set[int]] = defaultdict(set)
+        for i, item in enumerate(items):
+            for tok in item["tokens"]:
+                token_to_ids[tok].add(i)
+
+        written = 0
+        for i, item in enumerate(items):
+            candidates: set[int] = set()
+            for tok in item["tokens"]:
+                candidates.update(token_to_ids[tok])
+            candidates.discard(i)
+
+            scored: list[tuple[float, str]] = []
+            for j in candidates:
+                sim = _jaccard_similarity(item["tokens"], items[j]["tokens"])
+                if sim >= min_similarity:
+                    scored.append((sim, items[j]["rel"]))
+            scored.sort(key=lambda x: (-x[0], x[1]))
+            target_rels = [rel for _, rel in scored[:topk]]
+            if target_rels:
+                section_body = "\n".join(
+                    f"- {wikilink_for_path(rel, from_rel=item['rel'])}"
+                    for rel in target_rels
+                )
+            else:
+                section_body = "_None._"
+
+            updated_text = _upsert_markdown_h2_section(
+                item["text"], "Semantic", section_body
+            )
+            item["path"].write_text(updated_text, encoding="utf-8")
+            written += 1
+        return written
+
     def _graph_rel(self, subpath: str) -> str:
         """Path relative to graph_vault root."""
         try:
@@ -445,3 +512,25 @@ def _slug_tag(text: str) -> str:
 
 def _escape_yaml(value: str) -> str:
     return value.replace('"', '\\"')
+
+
+def _jaccard_similarity(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    if inter == 0:
+        return 0.0
+    return inter / len(a | b)
+
+
+def _upsert_markdown_h2_section(text: str, section: str, body: str) -> str:
+    normalized = text if text.endswith("\n") else text + "\n"
+    header = f"\n## {section}\n"
+    replacement = f"{header}\n{body.strip()}\n"
+    pattern = re.compile(
+        rf"\n##\s+{re.escape(section)}\s*\n.*?(?=\n##\s+|\Z)",
+        re.DOTALL,
+    )
+    if pattern.search(normalized):
+        return pattern.sub(replacement, normalized).rstrip() + "\n"
+    return normalized.rstrip() + replacement

@@ -70,6 +70,7 @@ Options:
 ### LLM fragment summaries (`--llm-summary`)
 
 When enabled, each fragment gets a **`cg_llm_summary`** field in YAML frontmatter. The **original chunk stays in the note body** — query output and `--full-body` are unchanged.
+After summaries are generated, build adds a `## Semantic` section in each fragment with top related wikilinks computed from `cg_llm_summary` similarity.
 
 Summaries are **cached by SHA-256 of the fragment body** under `.llm_summary_cache/` in the graph vault.  
 Each model writes to a separate file: `.llm_summary_cache/<model>.json` (sanitized filename).  
