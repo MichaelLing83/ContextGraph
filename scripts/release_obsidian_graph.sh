@@ -189,6 +189,13 @@ WHEEL_SHA="$(shasum -a 256 "$WHEEL" | awk '{print $1}')"
 cat > "$NOTES_FILE" <<EOF
 Obsidian context graph release **${VERSION}**.
 
+## Included capabilities
+
+- Build an Obsidian-native graph vault from markdown sources (`Fragments/` + `MOC.md`) with frontmatter-only source references by default.
+- Optional LLM fragment summaries (`cg_llm_summary`) with per-model content-hash cache reuse.
+- Semantic fragment-to-fragment wikilinks derived from `cg_llm_summary` similarity.
+- Query CLI with tag/link-aware search, exact phrase filter, JSON output, and merged knowledge summary output.
+
 ## Install (wheel)
 
 \`\`\`bash
