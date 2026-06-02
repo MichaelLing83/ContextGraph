@@ -142,6 +142,43 @@ def repair_links() -> None:
     _run_bundled_script("repair_obsidian_graph_links.py")
 '''
 
+VAULT_MAIN = '''\
+"""Cross-platform CLI: python -m agent_memory.vault <command> [args...]"""
+
+from __future__ import annotations
+
+import sys
+
+from agent_memory.vault.cli import build_graph, query_vault, repair_links
+
+_COMMANDS = {
+    "build-graph": ("build-obsidian-graph", build_graph),
+    "query-vault": ("query-obsidian-vault", query_vault),
+    "repair-links": ("repair-obsidian-graph-links", repair_links),
+}
+
+
+def main(argv: list[str] | None = None) -> None:
+    argv = list(argv if argv is not None else sys.argv[1:])
+    if not argv or argv[0] in ("-h", "--help"):
+        print("Usage: python -m agent_memory.vault <command> [args...]")
+        print()
+        print("Commands:")
+        for name in _COMMANDS:
+            print(f"  {name}")
+        raise SystemExit(0)
+    command = argv[0]
+    if command not in _COMMANDS:
+        raise SystemExit(f"Unknown command: {command!r} (try --help)")
+    prog, handler = _COMMANDS[command]
+    sys.argv = [prog, *argv[1:]]
+    handler()
+
+
+if __name__ == "__main__":
+    main()
+'''
+
 README = '''\
 # Obsidian Context Graph {version}
 
@@ -149,11 +186,28 @@ Standalone release of the Obsidian vault pipeline from ContextGraph.
 
 ## Install
 
-From wheel:
+From wheel (inside a uv virtual environment):
 
 ```bash
 uv pip install obsidian_context_graph-{version}-py3-none-any.whl
 ```
+
+Run CLI (pick one):
+
+```bash
+# Recommended with uv (macOS/Linux/Windows)
+uv run build-obsidian-graph --help
+uv run query-obsidian-vault --help
+
+# Cross-platform module fallback
+python -m agent_memory.vault build-graph --help
+python -m agent_memory.vault query-vault --help
+
+# Windows: after activating .venv\\Scripts\\activate
+build-obsidian-graph --help
+```
+
+Console scripts are installed to the environment's ``Scripts/`` folder (Windows) or ``bin/`` (Unix). They are not on PATH until the venv is activated or you use ``uv run``.
 
 From source directory:
 
@@ -257,6 +311,7 @@ def stage_release(version: str, staging: Path) -> list[str]:
     write_text("agent_memory/__init__.py", PACKAGE_INIT.format(version=version))
     write_text("agent_memory/vault/__init__.py", VAULT_INIT)
     write_text("agent_memory/vault/cli.py", CLI_MODULE)
+    write_text("agent_memory/vault/__main__.py", VAULT_MAIN)
 
     bundled_dir = staging / "agent_memory/vault/_bundled_scripts"
     bundled_dir.mkdir(parents=True, exist_ok=True)

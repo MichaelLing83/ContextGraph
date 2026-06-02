@@ -138,9 +138,17 @@ Install from wheel:
 
 ```bash
 uv pip install obsidian_context_graph-<version>-py3-none-any.whl
-build-obsidian-graph --help
-query-obsidian-vault --help
+
+# Recommended (works on Windows/macOS/Linux when using uv venv)
+uv run build-obsidian-graph --help
+uv run query-obsidian-vault --help
+
+# Cross-platform fallback (no PATH entry required)
+python -m agent_memory.vault build-graph --help
+python -m agent_memory.vault query-vault --help
 ```
+
+On Windows, console scripts install as `.venv\\Scripts\\build-obsidian-graph.exe`. Activate the venv first, or prefer `uv run` / `python -m` above.
 
 ## 2. Search
 
