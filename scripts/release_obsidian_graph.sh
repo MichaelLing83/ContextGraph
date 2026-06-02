@@ -9,6 +9,7 @@
 #   ./scripts/release_obsidian_graph.sh --draft      # create a draft GitHub release
 #   ./scripts/release_obsidian_graph.sh --no-commit  # skip committing VERSION bump
 #   ./scripts/release_obsidian_graph.sh --no-push      # skip pushing branch before gh release
+#   ./scripts/release_obsidian_graph.sh --no-tag       # skip creating/pushing obsidian-v* git tag
 
 set -euo pipefail
 
@@ -21,6 +22,7 @@ NO_PUBLISH=false
 DRAFT=false
 NO_COMMIT=false
 NO_PUSH=false
+NO_TAG=false
 REPO=""
 
 usage() {
@@ -34,6 +36,7 @@ Options:
   --draft         Publish as a GitHub draft release
   --no-commit     Do not auto-commit releases/obsidian/VERSION after bump
   --no-push       Do not push the current branch before creating the GitHub release
+  --no-tag        Do not create or push obsidian-v* git tag on the release commit
   --repo OWNER/REPO  GitHub repo for gh (default: current git remote origin)
   -h, --help      Show this help
 EOF
@@ -47,6 +50,7 @@ while [[ $# -gt 0 ]]; do
         --draft) DRAFT=true; shift ;;
         --no-commit) NO_COMMIT=true; shift ;;
         --no-push) NO_PUSH=true; shift ;;
+        --no-tag) NO_TAG=true; shift ;;
         --repo)
             REPO="$2"
             shift 2
@@ -100,6 +104,12 @@ if $DRY_RUN; then
     if ! $NO_PUSH && ! $NO_PUBLISH; then
         echo "[dry-run] Would push:       origin HEAD"
     fi
+    if ! $NO_TAG; then
+        echo "[dry-run] Would git tag:    ${TAG} (on release commit)"
+        if ! $NO_PUSH && ! $NO_PUBLISH; then
+            echo "[dry-run] Would push tag: origin ${TAG}"
+        fi
+    fi
     if ! $NO_PUBLISH; then
         echo "[dry-run] Would gh release: ${TAG} on ${REPO}"
         echo "  dist/obsidian-context-graph-${VERSION}.tar.gz"
@@ -144,6 +154,34 @@ if $COMMITTED && ! $NO_PUSH && ! $NO_PUBLISH; then
     git push origin HEAD
 fi
 
+create_release_tag() {
+    if $NO_TAG; then
+        return 0
+    fi
+    if git rev-parse "$TAG" >/dev/null 2>&1; then
+        local tagged_commit
+        tagged_commit="$(git rev-list -n 1 "$TAG")"
+        if [[ "$tagged_commit" != "$(git rev-parse HEAD)" ]]; then
+            echo "Tag ${TAG} already exists on a different commit (${tagged_commit:0:7})" >&2
+            exit 1
+        fi
+        echo "==> Tag already on HEAD: ${TAG}"
+        return 0
+    fi
+    echo "==> Creating annotated tag ${TAG} on $(git rev-parse --short HEAD)"
+    git tag -a "$TAG" -m "Obsidian context graph release ${VERSION}"
+}
+
+push_release_tag() {
+    if $NO_TAG || $NO_PUSH; then
+        return 0
+    fi
+    echo "==> Pushing tag to origin: ${TAG}"
+    git push origin "$TAG"
+}
+
+create_release_tag
+
 NOTES_FILE="$(mktemp)"
 trap 'rm -f "$NOTES_FILE"' EXIT
 ARCHIVE_SHA="$(shasum -a 256 "$ARCHIVE" | awk '{print $1}')"
@@ -172,21 +210,23 @@ EOF
 if $NO_PUBLISH; then
     echo "==> Build complete (skipping GitHub release)"
     echo "    Version:  ${VERSION}"
+    if ! $NO_TAG; then
+        if $NO_PUSH; then
+            echo "    Tag:      ${TAG} (local only)"
+        else
+            echo "    Tag:      ${TAG} (local, not pushed)"
+        fi
+    fi
     echo "    Archive:  ${ARCHIVE}"
     echo "    Wheel:    ${WHEEL}"
     echo "    Manifest: ${MANIFEST}"
     exit 0
 fi
 
+push_release_tag
+
 echo "==> Checking gh authentication"
 gh auth status >/dev/null
-
-if git rev-parse "$TAG" >/dev/null 2>&1; then
-    echo "==> Tag already exists locally: ${TAG}"
-else
-    echo "==> Creating tag ${TAG}"
-    git tag -a "$TAG" -m "Obsidian context graph release ${VERSION}"
-fi
 
 GH_ARGS=(
     release create "$TAG"

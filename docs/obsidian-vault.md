@@ -132,7 +132,7 @@ Output:
 - `dist/obsidian-context-graph-<version>.tar.gz` — full source bundle (scripts, tests, docs)
 - `dist/obsidian_context_graph-<version>-py3-none-any.whl` — installable Python wheel
 - `dist/obsidian-context-graph-<version>.tar.manifest.json` — checksums
-- GitHub Release tag: `obsidian-v<version>` (e.g. `obsidian-v0.1.1`)
+- GitHub Release tag: `obsidian-v<version>` (e.g. `obsidian-v0.1.1`) — annotated git tag on the VERSION commit, pushed to origin
 
 Install from wheel:
 
