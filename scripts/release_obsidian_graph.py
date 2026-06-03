@@ -41,12 +41,15 @@ OBSIDIAN_SOURCE_FILES = [
     "agent_memory/vault/wikilinks.py",
     "agent_memory/vault/obsidian_graph.py",
     "agent_memory/vault/fragment_summary.py",
+    "agent_memory/vault/similarity.py",
+    "agent_memory/vault/passage_query.py",
     "agent_memory/vault/obsidian_index.py",
     "agent_memory/vault/summarize.py",
     "agent_memory/vault/graph_stats.py",
 ] + OBSIDIAN_CLI_SCRIPTS + [
     "docs/obsidian-vault.md",
     "tests/test_obsidian_graph.py",
+    "tests/test_passage_query.py",
     "tests/test_fragment_summary.py",
     "tests/test_vault_parser.py",
     "tests/test_vault_summarize.py",
@@ -295,6 +298,41 @@ def validate_sources() -> None:
     missing = [rel for rel in OBSIDIAN_SOURCE_FILES if not (PROJECT_ROOT / rel).is_file()]
     if missing:
         raise SystemExit("Missing source files:\n  " + "\n  ".join(missing))
+    validate_release_import_closure()
+
+
+def _vault_modules_in_release() -> set[str]:
+    return {
+        Path(rel).stem
+        for rel in OBSIDIAN_SOURCE_FILES
+        if rel.startswith("agent_memory/vault/") and rel.endswith(".py")
+    }
+
+
+def validate_release_import_closure() -> None:
+    """Fail if a packaged vault module imports another vault module not in the release."""
+    packaged = _vault_modules_in_release()
+    py_files = [
+        *(PROJECT_ROOT / rel for rel in OBSIDIAN_SOURCE_FILES if rel.endswith(".py")),
+        *(PROJECT_ROOT / rel for rel in OBSIDIAN_CLI_SCRIPTS),
+    ]
+    import_re = re.compile(
+        r"^\s*(?:from agent_memory\.vault\.(\w+)|import agent_memory\.vault\.(\w+))",
+        re.MULTILINE,
+    )
+    missing: set[str] = set()
+    for path in py_files:
+        if not path.is_file():
+            continue
+        for m in import_re.finditer(path.read_text(encoding="utf-8")):
+            mod = m.group(1) or m.group(2)
+            if mod not in packaged:
+                missing.add(mod)
+    if missing:
+        raise SystemExit(
+            "Release package missing vault modules required by imports:\n  "
+            + "\n  ".join(f"agent_memory/vault/{name}.py" for name in sorted(missing))
+        )
 
 
 def stage_release(version: str, staging: Path) -> list[str]:
