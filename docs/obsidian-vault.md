@@ -57,9 +57,9 @@ Options:
 | `--link-mode stub` | One `Sources/*.md` card per source note; fragments link with `[[Sources/...]]` (adds source nodes to Graph view) |
 | `--link-mode symlink` | `Sources/` → symlink to source vault; links like `[[Sources/Projects/Note]]` |
 | `--max-notes N` | Ingest only the first N files (testing) |
-| `--chunk-mode heading` | One fragment per markdown heading (default) |
+| `--chunk-mode adaptive` | **(default)** Greedy merge by `--fragment-chars`; short notes stay whole |
+| `--chunk-mode heading` | One fragment per markdown heading |
 | `--chunk-mode chapter` | One fragment per source note |
-| `--chunk-mode adaptive` | Greedy merge by `--fragment-chars`; short notes stay whole |
 | `--fragment-chars 500` | Target size for `adaptive` mode (default 500) |
 | `--fragment-max-chars 3000` | Cap per fragment; longer pieces split on `\\n\\n` paragraphs (default 3000; `0`=off) |
 | `--related-mode all` | Sibling links in each fragment’s `## Related` section (see below) |
@@ -129,9 +129,9 @@ Example with five sections `A B C D E` and `--related-mode topk --related-topk 2
 
 Use `adjacent` or `topk` to keep Obsidian’s graph view sparse on long docs.
 
-### Adaptive chunking (`--chunk-mode adaptive`)
+### Adaptive chunking (default)
 
-Uses **plain text length** after stripping markup:
+`--chunk-mode adaptive` is the default. Uses **plain text length** after stripping markup:
 
 1. If the whole note ≤ `fragment-chars` → **one** fragment (entire chapter).
 2. Otherwise split into small units (per `##` block, or per paragraph if no headings).
@@ -151,7 +151,6 @@ uv run python scripts/build_obsidian_graph.py \
   --source-vault ~/Vaults/MyNotes \
   --graph-vault ~/Vaults/BooksGraph \
   --glob "Books/**/*.md" \
-  --chunk-mode adaptive \
   --fragment-chars 500
 ```
 

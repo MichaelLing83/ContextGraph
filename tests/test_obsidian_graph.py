@@ -49,7 +49,7 @@ def test_build_graph_embedded_subfolder(tmp_path: Path):
     )
 
     raw = parse_vault_note(note, tmp_path)
-    builder = ObsidianGraphBuilder(tmp_path, graph_dir="ContextGraph")
+    builder = ObsidianGraphBuilder(tmp_path, graph_dir="ContextGraph", chunk_mode="heading")
     builder.ingest_note(raw)
     builder.write_moc()
 
@@ -198,7 +198,7 @@ def test_related_mode_none_on_build(tmp_path: Path):
     )
     raw = parse_vault_note(note, tmp_path)
     builder = ObsidianGraphBuilder(
-        tmp_path, graph_dir="ContextGraph", related_mode="none"
+        tmp_path, graph_dir="ContextGraph", related_mode="none", chunk_mode="heading"
     )
     builder.ingest_note(raw)
     for frag in (tmp_path / "ContextGraph" / "Fragments").glob("*.md"):
@@ -215,7 +215,7 @@ def test_related_mode_adjacent_on_build(tmp_path: Path):
     )
     raw = parse_vault_note(note, tmp_path)
     builder = ObsidianGraphBuilder(
-        tmp_path, graph_dir="ContextGraph", related_mode="adjacent"
+        tmp_path, graph_dir="ContextGraph", related_mode="adjacent", chunk_mode="heading"
     )
     builder.ingest_note(raw)
     middle = tmp_path / "ContextGraph" / "Fragments" / "Doc--Two.md"

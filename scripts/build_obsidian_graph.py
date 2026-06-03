@@ -134,8 +134,8 @@ def main() -> None:
     parser.add_argument(
         "--chunk-mode",
         choices=("heading", "adaptive", "chapter"),
-        default="heading",
-        help="Fragment granularity: heading (per ##), adaptive (greedy target size), chapter (one per note)",
+        default="adaptive",
+        help="Fragment granularity: adaptive (greedy target size, default), heading (per ##), chapter (one per note)",
     )
     parser.add_argument(
         "--fragment-chars",

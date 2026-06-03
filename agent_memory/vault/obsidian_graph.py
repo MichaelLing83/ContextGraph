@@ -91,7 +91,7 @@ class ObsidianGraphBuilder:
         source_vault: Optional[Path] = None,
         graph_dir: str = "",
         link_mode: LinkMode = "frontmatter",
-        chunk_mode: ChunkMode = "heading",
+        chunk_mode: ChunkMode = "adaptive",
         fragment_chars: int = 500,
         fragment_max_chars: int = 3000,
         preserve_markup: bool = True,

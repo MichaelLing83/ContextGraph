@@ -38,7 +38,7 @@ def test_segment_by_headings(tmp_path: Path):
         encoding="utf-8",
     )
     note = parse_vault_note(md, tmp_path)
-    sections = segment_note(note)
+    sections = segment_note(note, mode="heading")
     # H1 + H2s: segmenter emits one block per heading (incl. document title)
     assert len(sections) >= 2
     headings = [s.heading for s in sections]
@@ -143,5 +143,5 @@ def test_segment_paragraphs_when_no_headings(tmp_path: Path):
     body = "\n\n".join(f"Paragraph {i}. " + ("word " * 40) for i in range(8))
     md.write_text(body, encoding="utf-8")
     note = parse_vault_note(md, tmp_path)
-    sections = segment_note(note)
+    sections = segment_note(note, mode="heading")
     assert len(sections) >= 1

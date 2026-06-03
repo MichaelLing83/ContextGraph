@@ -18,7 +18,7 @@ ChunkMode = Literal["heading", "adaptive", "chapter"]
 def segment_note(
     note: RawVaultNote,
     *,
-    mode: ChunkMode = "heading",
+    mode: ChunkMode = "adaptive",
     target_chars: int = 500,
     max_fragment_chars: int = 3000,
     max_section_chars: int = 4000,
