@@ -67,6 +67,7 @@ class FragmentSummaryCache:
 
     cache_path: Path
     prompt_version: str = PROMPT_VERSION
+    autosave: bool = True
     _entries: dict[str, dict] = field(default_factory=dict, init=False, repr=False)
 
     def load(self) -> None:
@@ -91,10 +92,10 @@ class FragmentSummaryCache:
             "prompt_version": self.prompt_version,
             "entries": self._entries,
         }
-        self.cache_path.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        text = json.dumps(payload, indent=2, ensure_ascii=False)
+        tmp = self.cache_path.with_suffix(self.cache_path.suffix + ".tmp")
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(self.cache_path)
 
     def get(self, body: str, *, model: str) -> Optional[str]:
         entry = self._entries.get(fragment_body_hash(body))
@@ -115,6 +116,8 @@ class FragmentSummaryCache:
             "prompt_version": self.prompt_version,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
+        if self.autosave:
+            self.save()
 
 
 class FragmentSummarizer:
@@ -128,6 +131,7 @@ class FragmentSummarizer:
         model: str = DEFAULT_MODEL,
         cache: FragmentSummaryCache,
         on_progress: Optional[Callable[[FragmentSummaryStats], None]] = None,
+        disable_reasoning: bool = True,
     ):
         self.api_base = api_base.rstrip("/")
         if not self.api_base.endswith("/v1"):
@@ -139,6 +143,7 @@ class FragmentSummarizer:
         self.on_progress = on_progress
         self._client = None
         self._warned_empty_content = False
+        self.disable_reasoning = disable_reasoning
 
     def _get_client(self):
         if self._client is None:
@@ -169,12 +174,16 @@ class FragmentSummarizer:
             )
 
             try:
-                response = self._get_client().chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=300,
-                    temperature=0.2,
-                )
+                create_kwargs: dict = {
+                    "model": self.model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 300,
+                    "temperature": 0.2,
+                }
+                if self.disable_reasoning:
+                    # Build/query only need the final summary, not chain-of-thought.
+                    create_kwargs["extra_body"] = {"reasoning_effort": "none"}
+                response = self._get_client().chat.completions.create(**create_kwargs)
                 msg = response.choices[0].message
                 raw = (msg.content or "").strip()
             except Exception as e:
@@ -191,9 +200,8 @@ class FragmentSummarizer:
                     )
                     if reasoning:
                         logger.warning(
-                            "Model %r returned empty message.content but non-empty reasoning. "
-                            "This Ollama/OpenAI-compatible behavior yields no summary; "
-                            "switch to a non-thinking model (e.g. llama3:latest) for --llm-summary.",
+                            "Model %r returned empty message.content but non-empty reasoning "
+                            "despite reasoning_effort=none. Try another model (e.g. llama3:latest).",
                             self.model,
                         )
                     else:

@@ -73,8 +73,8 @@ When enabled, each fragment gets a **`cg_llm_summary`** field in YAML frontmatte
 After summaries are generated, build adds a `## Semantic` section in each fragment with top related wikilinks computed from `cg_llm_summary` similarity.
 
 Summaries are **cached by SHA-256 of the fragment body** under `.llm_summary_cache/` in the graph vault.  
-Each model writes to a separate file: `.llm_summary_cache/<model>.json` (sanitized filename).  
-Rebuild skips the LLM when the source chunk text is identical (even if the fragment file was recreated). Cache also keys on prompt version.
+Each model writes to a separate file: `.llm_summary_cache/<model>.json` (sanitized filename, e.g. `deepseek-r1-1.5b.json`).  
+Each successful LLM summary is **written to disk immediately** (incremental autosave); rebuild skips the LLM when the source chunk text is identical (even if the fragment file was recreated). Cache also keys on prompt version.
 
 ```bash
 uv run python scripts/build_obsidian_graph.py \
@@ -108,7 +108,7 @@ uv run python scripts/build_obsidian_graph.py \
   --llm-api-key ollama
 ```
 
-Note: some reasoning-oriented local models can return empty `message.content` on OpenAI-compatible endpoints (text appears in a separate reasoning field), which causes summary failures in this pipeline. If that happens, switch to a non-thinking chat model like `llama3:latest` or `gemma3:4b`.
+Note: build and passage query always send `reasoning_effort: none` — only the final summary is needed, not chain-of-thought. This avoids empty `message.content` on thinking models (e.g. `deepseek-r1:1.5b`, `qwen3.5:4b` on Ollama). If summaries still fail, try `llama3:latest` or `gemma3:4b`.
 
 ### Sibling fragment links (`--related-mode`)
 
