@@ -9,6 +9,13 @@ Separate source and graph vaults:
 Usage:
     uv run python scripts/build_obsidian_graph.py --source-vault ~/Notes --graph-vault ~/NotesGraph
     uv run python scripts/build_obsidian_graph.py --source-vault ~/Notes --graph-vault ~/NotesGraph --link-mode stub
+
+    # Local Ollama / vLLM (--llm-proxy none: bypass system proxy on Windows)
+    uv run python scripts/build_obsidian_graph.py \\
+        --source-vault ~/Notes --graph-vault ~/NotesGraph \\
+        --llm-summary --llm-api-base http://localhost:11434/v1 \\
+        --llm-api-key ollama --llm-summary-model llama3:latest \\
+        --llm-proxy none --llm-http-version 1.1
 """
 
 from __future__ import annotations
@@ -35,6 +42,7 @@ from agent_memory.vault.fragment_summary import (
     DEFAULT_MODEL,
     FragmentSummarizer,
     FragmentSummaryCache,
+    add_llm_http_arguments,
     cache_path_for_model,
 )
 from agent_memory.vault.obsidian_graph import ObsidianGraphBuilder
@@ -191,6 +199,7 @@ def main() -> None:
         default=os.environ.get("LITELLM_MASTER_KEY", os.environ.get("OPENAI_API_KEY", "")),
         help="API key for --llm-summary (LITELLM_MASTER_KEY or OPENAI_API_KEY)",
     )
+    add_llm_http_arguments(parser)
     args = parser.parse_args()
 
     source_vault = args.source_vault.expanduser().resolve()
@@ -294,6 +303,8 @@ def main() -> None:
             model=args.llm_summary_model,
             cache=summary_cache,
             on_progress=_on_summary_progress,
+            llm_proxy=args.llm_proxy,
+            llm_http_version=args.llm_http_version,
         )
 
     ingested = 0

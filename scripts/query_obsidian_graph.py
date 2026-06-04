@@ -12,7 +12,9 @@ Usage:
     uv run python scripts/query_obsidian_graph.py --vault ~/Graph \
       --query-passage "How do I migrate from pip to uv?" \
       --tag cg/fragment --hops 1 --llm-summary \
-      --llm-api-base http://localhost:11434/v1 --llm-api-key ollama --llm-summary-model llama3:latest
+      --llm-api-base http://localhost:11434/v1 --llm-api-key ollama \
+      --llm-summary-model llama3:latest \
+      --llm-proxy none --llm-http-version 1.1
 
     # Merge hits into one knowledge summary (markdown)
     uv run python scripts/query_obsidian_graph.py --vault ~/Graph -q "utmärkt" --tag cg/fragment --summary
@@ -33,6 +35,7 @@ from agent_memory.vault.fragment_summary import (  # noqa: E402
     DEFAULT_MODEL,
     FragmentSummarizer,
     FragmentSummaryCache,
+    add_llm_http_arguments,
     cache_path_for_model,
 )
 from agent_memory.vault.obsidian_index import ObsidianVaultIndex  # noqa: E402
@@ -50,6 +53,8 @@ def _summarize_passage(
     api_base: str,
     api_key: str,
     model: str,
+    llm_proxy: str,
+    llm_http_version: str,
 ) -> str:
     cache = FragmentSummaryCache(cache_path_for_model(vault, model))
     summarizer = FragmentSummarizer(
@@ -57,6 +62,8 @@ def _summarize_passage(
         api_key=api_key,
         model=model,
         cache=cache,
+        llm_proxy=llm_proxy,
+        llm_http_version=llm_http_version,
     )
     first_line = next((ln.strip() for ln in passage.splitlines() if ln.strip()), "Query passage")
     heading = first_line.lstrip("#").strip()[:120]
@@ -149,6 +156,7 @@ def main() -> None:
         default=os.environ.get("LITELLM_MASTER_KEY", os.environ.get("OPENAI_API_KEY", "")),
         help="API key for --llm-summary",
     )
+    add_llm_http_arguments(parser)
     parser.add_argument("--json", action="store_true", help="JSON output")
     parser.add_argument(
         "--list-tags",
@@ -232,6 +240,8 @@ def main() -> None:
                 api_base=args.llm_api_base,
                 api_key=args.llm_api_key,
                 model=args.llm_summary_model,
+                llm_proxy=args.llm_proxy,
+                llm_http_version=args.llm_http_version,
             )
         tags = args.tag or ["cg/fragment"]
         hops = args.hops if args.hops > 0 else 1

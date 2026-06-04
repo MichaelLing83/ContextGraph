@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import logging
@@ -9,7 +10,10 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Literal, Optional
+
+HttpVersion = Literal["1.1", "2"]
+LlmProxyMode = Literal["auto", "none"]
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +47,92 @@ def _model_slug(model: str) -> str:
 def cache_path_for_model(cache_root: Path, model: str) -> Path:
     """Model-scoped cache file path under ``.llm_summary_cache/``."""
     return cache_root / CACHE_DIRNAME / f"{_model_slug(model)}.json"
+
+
+def normalize_llm_proxy(value: str) -> str:
+    """Return ``auto``, ``none``, or an explicit proxy URL."""
+    raw = value.strip()
+    if not raw:
+        return "auto"
+    lower = raw.lower()
+    if lower in ("auto", "env", "default"):
+        return "auto"
+    if lower in ("none", "off", "false", "direct", "no"):
+        return "none"
+    if raw.startswith(("http://", "https://", "socks5://", "socks4://")):
+        return raw
+    raise ValueError(
+        f"Invalid --llm-proxy {value!r}: use auto, none, or a proxy URL "
+        "(e.g. http://127.0.0.1:7890)"
+    )
+
+
+def normalize_llm_http_version(value: str) -> HttpVersion:
+    v = value.strip().lower()
+    if v in ("1.1", "1", "http1", "http/1.1", "http1.1"):
+        return "1.1"
+    if v in ("2", "http2", "http/2", "h2"):
+        return "2"
+    raise ValueError(f"Invalid --llm-http-version {value!r}: use 1.1 or 2")
+
+
+def openai_http_client(
+    *,
+    use_proxy: str = "auto",
+    http_version: HttpVersion = "1.1",
+    timeout: float = 120.0,
+):
+    """
+    httpx client for OpenAI SDK LLM calls.
+
+    ``use_proxy``:
+      - ``auto``: honor HTTP_PROXY / HTTPS_PROXY (Windows system proxy)
+      - ``none``: bypass env proxies (recommended for localhost Ollama/vLLM)
+      - ``http://...``: explicit proxy URL
+    """
+    import httpx
+
+    proxy_mode = normalize_llm_proxy(use_proxy)
+    http2 = http_version == "2"
+    if http2:
+        try:
+            import h2  # noqa: F401
+        except ImportError:
+            logger.warning(
+                "httpx HTTP/2 requested but h2 is not installed; using HTTP/1.1 "
+                "(uv pip install 'httpx[http2]')"
+            )
+            http2 = False
+
+    if proxy_mode == "none":
+        return httpx.Client(trust_env=False, http2=http2, timeout=timeout)
+    if proxy_mode == "auto":
+        return httpx.Client(trust_env=True, http2=http2, timeout=timeout)
+    return httpx.Client(
+        proxy=proxy_mode,
+        trust_env=False,
+        http2=http2,
+        timeout=timeout,
+    )
+
+
+def add_llm_http_arguments(parser: argparse.ArgumentParser) -> None:
+    """Register ``--llm-proxy`` and ``--llm-http-version`` on build/query CLIs."""
+    parser.add_argument(
+        "--llm-proxy",
+        default="auto",
+        metavar="MODE|URL",
+        help=(
+            "HTTP proxy for --llm-summary: auto (env/system proxy, default), "
+            "none (direct, for localhost), or URL (e.g. http://127.0.0.1:7890)"
+        ),
+    )
+    parser.add_argument(
+        "--llm-http-version",
+        default="1.1",
+        choices=("1.1", "2"),
+        help="HTTP version for LLM API requests (default: 1.1; use 2 only if server supports it)",
+    )
 
 
 @dataclass
@@ -132,6 +222,8 @@ class FragmentSummarizer:
         cache: FragmentSummaryCache,
         on_progress: Optional[Callable[[FragmentSummaryStats], None]] = None,
         disable_reasoning: bool = True,
+        llm_proxy: str = "auto",
+        llm_http_version: HttpVersion = "1.1",
     ):
         self.api_base = api_base.rstrip("/")
         if not self.api_base.endswith("/v1"):
@@ -142,14 +234,25 @@ class FragmentSummarizer:
         self.stats = FragmentSummaryStats()
         self.on_progress = on_progress
         self._client = None
+        self._http_client = None
         self._warned_empty_content = False
         self.disable_reasoning = disable_reasoning
+        self.llm_proxy = normalize_llm_proxy(llm_proxy)
+        self.llm_http_version = normalize_llm_http_version(llm_http_version)
 
     def _get_client(self):
         if self._client is None:
             from openai import OpenAI
 
-            self._client = OpenAI(base_url=self.api_base, api_key=self.api_key)
+            self._http_client = openai_http_client(
+                use_proxy=self.llm_proxy,
+                http_version=self.llm_http_version,
+            )
+            self._client = OpenAI(
+                base_url=self.api_base,
+                api_key=self.api_key,
+                http_client=self._http_client,
+            )
         return self._client
 
     def summarize(self, heading: str, body: str) -> Optional[str]:

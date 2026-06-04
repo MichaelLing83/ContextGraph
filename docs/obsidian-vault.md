@@ -66,6 +66,8 @@ Options:
 | `--related-topk 2` | With `topk` mode: max links per fragment (default **2**) |
 | `--llm-summary` | Generate `cg_llm_summary` in fragment frontmatter via LLM (optional) |
 | `--llm-summary-model` | Model for `--llm-summary` (default: `claude-sonnet-4-20250514`; recommended local default: `llama3:latest` with Ollama) |
+| `--llm-proxy` | `auto` (env/system proxy), `none` (direct — use for localhost on Windows), or proxy URL |
+| `--llm-http-version` | `1.1` (default) or `2` for LLM API HTTP version |
 
 ### LLM fragment summaries (`--llm-summary`)
 
@@ -96,7 +98,7 @@ uv run python scripts/build_obsidian_graph.py \
   --llm-summary-model claude-sonnet-4-20250514
 ```
 
-Ollama local model example (recommended default for local summarization):
+Ollama local model example (recommended default for local summarization; `--llm-proxy none` bypasses system proxy on Windows):
 
 ```bash
 uv run python scripts/build_obsidian_graph.py \
@@ -105,10 +107,14 @@ uv run python scripts/build_obsidian_graph.py \
   --llm-summary \
   --llm-summary-model llama3:latest \
   --llm-api-base http://localhost:11434/v1 \
-  --llm-api-key ollama
+  --llm-api-key ollama \
+  --llm-proxy none \
+  --llm-http-version 1.1
 ```
 
 Note: build and passage query always send `reasoning_effort: none` — only the final summary is needed, not chain-of-thought. This avoids empty `message.content` on thinking models (e.g. `deepseek-r1:1.5b`, `qwen3.5:4b` on Ollama). If summaries still fail, try `llama3:latest` or `gemma3:4b`.
+
+Use `--llm-proxy auto` (default) when calling LiteLLM or a remote API through `HTTP_PROXY`. Use `--llm-http-version 2` only if your server requires HTTP/2 (`uv pip install 'httpx[http2]'`).
 
 ### Sibling fragment links (`--related-mode`)
 
@@ -239,7 +245,9 @@ uv run python scripts/query_obsidian_graph.py \
   --llm-summary \
   --llm-api-base http://localhost:11434/v1 \
   --llm-api-key ollama \
-  --llm-summary-model llama3:latest
+  --llm-summary-model llama3:latest \
+  --llm-proxy none \
+  --llm-http-version 1.1
 ```
 
 Or read from a file:
@@ -259,6 +267,8 @@ uv run python scripts/query_obsidian_graph.py \
 | `--semantic-min` | Min summary Jaccard to record `semantic:*` reason (default 0.15) |
 | `--semantic-weight` / `--lexical-weight` | Fusion weights when both query and fragment have summaries (0.6 / 0.4) |
 | `--llm-summary` | Summarize passage before semantic match (cache: `.llm_summary_cache/<model>.json`) |
+| `--llm-proxy` | Same as build: `auto`, `none`, or proxy URL |
+| `--llm-http-version` | `1.1` (default) or `2` |
 
 **Passage score reasons**: `semantic:0.XX`, `lexical:0.XX`, `passage_seed`, `link_expand`, `link_neighbor`.
 

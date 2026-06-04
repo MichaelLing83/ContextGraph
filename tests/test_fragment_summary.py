@@ -7,6 +7,9 @@ from agent_memory.vault.fragment_summary import (
     FragmentSummarizer,
     FragmentSummaryCache,
     fragment_body_hash,
+    normalize_llm_http_version,
+    normalize_llm_proxy,
+    openai_http_client,
 )
 from agent_memory.vault.obsidian_graph import ObsidianGraphBuilder
 from agent_memory.vault.obsidian_index import ObsidianVaultIndex
@@ -70,6 +73,35 @@ def test_fragment_body_hash_stable():
     body = "Same content"
     assert fragment_body_hash(body) == fragment_body_hash(body)
     assert fragment_body_hash(body) != fragment_body_hash(body + " ")
+
+
+def test_normalize_llm_proxy():
+    assert normalize_llm_proxy("auto") == "auto"
+    assert normalize_llm_proxy("none") == "none"
+    assert normalize_llm_proxy("direct") == "none"
+    assert normalize_llm_proxy("http://127.0.0.1:7890") == "http://127.0.0.1:7890"
+
+
+def test_normalize_llm_http_version():
+    assert normalize_llm_http_version("1.1") == "1.1"
+    assert normalize_llm_http_version("http2") == "2"
+
+
+@patch("httpx.Client")
+def test_openai_http_client_bypasses_proxy(mock_client):
+    openai_http_client(use_proxy="none", http_version="1.1")
+    mock_client.assert_called_once()
+    kwargs = mock_client.call_args.kwargs
+    assert kwargs["trust_env"] is False
+    assert kwargs["http2"] is False
+
+
+@patch("httpx.Client")
+def test_openai_http_client_explicit_proxy(mock_client):
+    openai_http_client(use_proxy="http://127.0.0.1:7890", http_version="1.1")
+    kwargs = mock_client.call_args.kwargs
+    assert kwargs["proxy"] == "http://127.0.0.1:7890"
+    assert kwargs["trust_env"] is False
 
 
 @patch("agent_memory.vault.fragment_summary.FragmentSummarizer._get_client")
