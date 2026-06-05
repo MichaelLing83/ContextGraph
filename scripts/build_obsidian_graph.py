@@ -43,7 +43,10 @@ from agent_memory.vault.fragment_summary import (
     FragmentSummarizer,
     FragmentSummaryCache,
     add_llm_http_arguments,
+    add_llm_summary_prompt_arguments,
     cache_path_for_model,
+    prompt_version_for_template,
+    resolve_summary_prompt,
 )
 from agent_memory.vault.obsidian_graph import ObsidianGraphBuilder
 from agent_memory.vault.segmenter import segment_note
@@ -200,6 +203,7 @@ def main() -> None:
         help="API key for --llm-summary (LITELLM_MASTER_KEY or OPENAI_API_KEY)",
     )
     add_llm_http_arguments(parser)
+    add_llm_summary_prompt_arguments(parser)
     args = parser.parse_args()
 
     source_vault = args.source_vault.expanduser().resolve()
@@ -239,7 +243,13 @@ def main() -> None:
 
     notes = list(iter_vault_notes(source_vault, glob=args.glob, max_notes=max_notes))
     estimated_fragments = 0
+    summary_cache = None
+    summary_prompt_template = None
     if args.llm_summary:
+        summary_prompt_template = resolve_summary_prompt(
+            prompt=args.llm_summary_prompt,
+            prompt_file=args.llm_summary_prompt_file,
+        )
         estimated_fragments = sum(_count_note_fragments(n, builder) for n in notes)
         logger.info(
             "LLM summary enabled: %d notes, %d fragments estimated (model=%s)",
@@ -255,7 +265,10 @@ def main() -> None:
             builder.graph_root,
             args.llm_summary_model,
         )
-        summary_cache = FragmentSummaryCache(summary_cache_path)
+        summary_cache = FragmentSummaryCache(
+            summary_cache_path,
+            prompt_version=prompt_version_for_template(summary_prompt_template),
+        )
         summary_cache.load()
 
     fragment_bar = None
@@ -305,6 +318,7 @@ def main() -> None:
             on_progress=_on_summary_progress,
             llm_proxy=args.llm_proxy,
             llm_http_version=args.llm_http_version,
+            summary_prompt_template=summary_prompt_template,
         )
 
     ingested = 0

@@ -36,7 +36,10 @@ from agent_memory.vault.fragment_summary import (  # noqa: E402
     FragmentSummarizer,
     FragmentSummaryCache,
     add_llm_http_arguments,
+    add_llm_summary_prompt_arguments,
     cache_path_for_model,
+    prompt_version_for_template,
+    resolve_summary_prompt,
 )
 from agent_memory.vault.obsidian_index import ObsidianVaultIndex  # noqa: E402
 from agent_memory.vault.passage_query import PassageQueryConfig, search_passage  # noqa: E402
@@ -55,8 +58,12 @@ def _summarize_passage(
     model: str,
     llm_proxy: str,
     llm_http_version: str,
+    summary_prompt_template: str,
 ) -> str:
-    cache = FragmentSummaryCache(cache_path_for_model(vault, model))
+    cache = FragmentSummaryCache(
+        cache_path_for_model(vault, model),
+        prompt_version=prompt_version_for_template(summary_prompt_template),
+    )
     summarizer = FragmentSummarizer(
         api_base=api_base,
         api_key=api_key,
@@ -64,6 +71,7 @@ def _summarize_passage(
         cache=cache,
         llm_proxy=llm_proxy,
         llm_http_version=llm_http_version,
+        summary_prompt_template=summary_prompt_template,
     )
     first_line = next((ln.strip() for ln in passage.splitlines() if ln.strip()), "Query passage")
     heading = first_line.lstrip("#").strip()[:120]
@@ -157,6 +165,7 @@ def main() -> None:
         help="API key for --llm-summary",
     )
     add_llm_http_arguments(parser)
+    add_llm_summary_prompt_arguments(parser)
     parser.add_argument("--json", action="store_true", help="JSON output")
     parser.add_argument(
         "--list-tags",
@@ -242,6 +251,10 @@ def main() -> None:
                 model=args.llm_summary_model,
                 llm_proxy=args.llm_proxy,
                 llm_http_version=args.llm_http_version,
+                summary_prompt_template=resolve_summary_prompt(
+                    prompt=args.llm_summary_prompt,
+                    prompt_file=args.llm_summary_prompt_file,
+                ),
             )
         tags = args.tag or ["cg/fragment"]
         hops = args.hops if args.hops > 0 else 1

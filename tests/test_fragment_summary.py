@@ -4,12 +4,16 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from agent_memory.vault.fragment_summary import (
+    DEFAULT_SUMMARY_PROMPT,
     FragmentSummarizer,
     FragmentSummaryCache,
     fragment_body_hash,
     normalize_llm_http_version,
     normalize_llm_proxy,
     openai_http_client,
+    prompt_version_for_template,
+    resolve_summary_prompt,
+    validate_summary_prompt_template,
 )
 from agent_memory.vault.obsidian_graph import ObsidianGraphBuilder
 from agent_memory.vault.obsidian_index import ObsidianVaultIndex
@@ -87,6 +91,25 @@ def test_normalize_llm_http_version():
     assert normalize_llm_http_version("http2") == "2"
 
 
+def test_resolve_summary_prompt_default():
+    assert resolve_summary_prompt() == DEFAULT_SUMMARY_PROMPT
+
+
+def test_resolve_summary_prompt_custom(tmp_path: Path):
+    path = tmp_path / "prompt.txt"
+    path.write_text("Title: {heading}\n\n{body}\n", encoding="utf-8")
+    template = resolve_summary_prompt(prompt_file=path)
+    assert "{heading}" in template
+    assert prompt_version_for_template(template).startswith("custom-")
+
+
+def test_validate_summary_prompt_requires_placeholders():
+    import pytest
+
+    with pytest.raises(ValueError, match="heading"):
+        validate_summary_prompt_template("Summarize: {body}")
+
+
 @patch("httpx.Client")
 def test_openai_http_client_bypasses_proxy(mock_client):
     openai_http_client(use_proxy="none", http_version="1.1")
@@ -123,6 +146,32 @@ def test_summarize_disables_reasoning_by_default(mock_get_client, tmp_path: Path
     summarizer.summarize("Heading", "Body text.")
     kwargs = mock_client.chat.completions.create.call_args.kwargs
     assert kwargs["extra_body"] == {"reasoning_effort": "none"}
+    assert "Body text." in kwargs["messages"][0]["content"]
+
+
+@patch("agent_memory.vault.fragment_summary.FragmentSummarizer._get_client")
+def test_summarize_uses_custom_prompt_template(mock_get_client, tmp_path: Path):
+    mock_client = MagicMock()
+    mock_get_client.return_value = mock_client
+    mock_client.chat.completions.create.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(content="Custom summary."))]
+    )
+
+    template = "Section {heading} says: {body}"
+    cache = FragmentSummaryCache(
+        tmp_path / ".llm_summary_cache.json",
+        prompt_version=prompt_version_for_template(template),
+    )
+    summarizer = FragmentSummarizer(
+        api_base="http://localhost:4000/v1",
+        api_key="test-key",
+        model="test-model",
+        cache=cache,
+        summary_prompt_template=template,
+    )
+    summarizer.summarize("Intro", "hello world")
+    prompt = mock_client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+    assert prompt == "Section Intro says: hello world"
 
 
 def test_build_writes_cg_llm_summary_from_cache(tmp_path: Path):

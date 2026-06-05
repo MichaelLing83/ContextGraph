@@ -23,7 +23,7 @@ CACHE_DIRNAME = ".llm_summary_cache"
 DEFAULT_MODEL = "claude-sonnet-4-20250514"
 MAX_BODY_CHARS = 4000
 
-_SUMMARY_PROMPT = """Summarize this vault note fragment in 2-4 concise sentences.
+DEFAULT_SUMMARY_PROMPT = """Summarize this vault note fragment in 2-4 concise sentences.
 Use the same language as the source text. Focus on key concepts and facts only.
 Do not use markdown headings or bullet lists.
 
@@ -32,6 +32,95 @@ Heading: {heading}
 Content:
 {body}
 """
+
+_REQUIRED_PROMPT_FIELDS = ("heading", "body")
+
+
+def validate_summary_prompt_template(template: str) -> None:
+    """Ensure the template can be filled with fragment heading and body."""
+    missing = [f for f in _REQUIRED_PROMPT_FIELDS if f"{{{f}}}" not in template]
+    if missing:
+        raise ValueError(
+            "LLM summary prompt must include placeholders "
+            + ", ".join(f"{{{f}}}" for f in missing)
+            + f"; missing: {', '.join(missing)}"
+        )
+    try:
+        template.format(heading="x", body="y")
+    except KeyError as e:
+        raise ValueError(
+            f"LLM summary prompt has unknown placeholder {e}; "
+            f"only {_REQUIRED_PROMPT_FIELDS} are supported"
+        ) from e
+
+
+def resolve_summary_prompt(
+    *,
+    prompt: str = "",
+    prompt_file: Path | None = None,
+) -> str:
+    """Return prompt template text (default, inline, and/or file)."""
+    parts: list[str] = []
+    if prompt_file is not None:
+        parts.append(prompt_file.expanduser().read_text(encoding="utf-8"))
+    if prompt.strip():
+        parts.append(prompt.strip())
+    if not parts:
+        return DEFAULT_SUMMARY_PROMPT
+    template = "\n\n".join(parts).strip()
+    validate_summary_prompt_template(template)
+    return template
+
+
+def prompt_version_for_template(template: str) -> str:
+    """Cache key for prompt template; default template keeps legacy version ``1``."""
+    if template == DEFAULT_SUMMARY_PROMPT:
+        return PROMPT_VERSION
+    digest = hashlib.sha256(template.encode("utf-8")).hexdigest()[:12]
+    return f"custom-{digest}"
+
+
+def render_summary_prompt(template: str, *, heading: str, body: str) -> str:
+    return template.format(
+        heading=(heading or "Untitled").strip(),
+        body=body,
+    )
+
+
+def add_llm_summary_prompt_arguments(parser: argparse.ArgumentParser) -> None:
+    """Register ``--llm-summary-prompt`` and ``--llm-summary-prompt-file``."""
+    parser.add_argument(
+        "--llm-summary-prompt",
+        default="",
+        help=(
+            "Custom prompt template for --llm-summary; must include {heading} and {body}. "
+            "Combined with --llm-summary-prompt-file when both are set."
+        ),
+    )
+    parser.add_argument(
+        "--llm-summary-prompt-file",
+        type=Path,
+        help="Read --llm-summary prompt template from a file ({heading} and {body} required)",
+    )
+
+
+def add_llm_http_arguments(parser: argparse.ArgumentParser) -> None:
+    """Register ``--llm-proxy`` and ``--llm-http-version`` on build/query CLIs."""
+    parser.add_argument(
+        "--llm-proxy",
+        default="auto",
+        metavar="MODE|URL",
+        help=(
+            "HTTP proxy for --llm-summary: auto (env/system proxy, default), "
+            "none (direct, for localhost), or URL (e.g. http://127.0.0.1:7890)"
+        ),
+    )
+    parser.add_argument(
+        "--llm-http-version",
+        default="1.1",
+        choices=("1.1", "2"),
+        help="HTTP version for LLM API requests (default: 1.1; use 2 only if server supports it)",
+    )
 
 
 def fragment_body_hash(body: str) -> str:
@@ -113,25 +202,6 @@ def openai_http_client(
         trust_env=False,
         http2=http2,
         timeout=timeout,
-    )
-
-
-def add_llm_http_arguments(parser: argparse.ArgumentParser) -> None:
-    """Register ``--llm-proxy`` and ``--llm-http-version`` on build/query CLIs."""
-    parser.add_argument(
-        "--llm-proxy",
-        default="auto",
-        metavar="MODE|URL",
-        help=(
-            "HTTP proxy for --llm-summary: auto (env/system proxy, default), "
-            "none (direct, for localhost), or URL (e.g. http://127.0.0.1:7890)"
-        ),
-    )
-    parser.add_argument(
-        "--llm-http-version",
-        default="1.1",
-        choices=("1.1", "2"),
-        help="HTTP version for LLM API requests (default: 1.1; use 2 only if server supports it)",
     )
 
 
@@ -224,6 +294,7 @@ class FragmentSummarizer:
         disable_reasoning: bool = True,
         llm_proxy: str = "auto",
         llm_http_version: HttpVersion = "1.1",
+        summary_prompt_template: str = DEFAULT_SUMMARY_PROMPT,
     ):
         self.api_base = api_base.rstrip("/")
         if not self.api_base.endswith("/v1"):
@@ -239,6 +310,7 @@ class FragmentSummarizer:
         self.disable_reasoning = disable_reasoning
         self.llm_proxy = normalize_llm_proxy(llm_proxy)
         self.llm_http_version = normalize_llm_http_version(llm_http_version)
+        self.summary_prompt_template = summary_prompt_template
 
     def _get_client(self):
         if self._client is None:
@@ -271,8 +343,9 @@ class FragmentSummarizer:
             if len(prompt_body) > MAX_BODY_CHARS:
                 prompt_body = prompt_body[:MAX_BODY_CHARS] + "…"
 
-            prompt = _SUMMARY_PROMPT.format(
-                heading=(heading or "Untitled").strip(),
+            prompt = render_summary_prompt(
+                self.summary_prompt_template,
+                heading=heading,
                 body=prompt_body,
             )
 

@@ -66,6 +66,8 @@ Options:
 | `--related-topk 2` | With `topk` mode: max links per fragment (default **2**) |
 | `--llm-summary` | Generate `cg_llm_summary` in fragment frontmatter via LLM (optional) |
 | `--llm-summary-model` | Model for `--llm-summary` (default: `claude-sonnet-4-20250514`; recommended local default: `llama3:latest` with Ollama) |
+| `--llm-summary-prompt` | Custom prompt template; must include `{heading}` and `{body}` |
+| `--llm-summary-prompt-file` | Read prompt template from file (combined with `--llm-summary-prompt` if both set) |
 | `--llm-proxy` | `auto` (env/system proxy), `none` (direct — use for localhost on Windows), or proxy URL |
 | `--llm-http-version` | `1.1` (default) or `2` for LLM API HTTP version |
 
@@ -76,7 +78,30 @@ After summaries are generated, build adds a `## Semantic` section in each fragme
 
 Summaries are **cached by SHA-256 of the fragment body** under `.llm_summary_cache/` in the graph vault.  
 Each model writes to a separate file: `.llm_summary_cache/<model>.json` (sanitized filename, e.g. `deepseek-r1-1.5b.json`).  
-Each successful LLM summary is **written to disk immediately** (incremental autosave); rebuild skips the LLM when the source chunk text is identical (even if the fragment file was recreated). Cache also keys on prompt version.
+Each successful LLM summary is **written to disk immediately** (incremental autosave); rebuild skips the LLM when the source chunk text is identical (even if the fragment file was recreated). Cache also keys on **model** and **prompt template** (custom prompts get a new cache namespace).
+
+Default prompt (override with `--llm-summary-prompt` / `--llm-summary-prompt-file`):
+
+```text
+Summarize this vault note fragment in 2-4 concise sentences.
+...
+Heading: {heading}
+
+Content:
+{body}
+```
+
+Custom template example:
+
+```bash
+uv run python scripts/build_obsidian_graph.py \
+  --source-vault ~/Vaults/MyNotes \
+  --graph-vault ~/Vaults/MyNotesGraph \
+  --llm-summary \
+  --llm-summary-prompt-file ./prompts/fragment_summary.txt
+```
+
+`fragment_summary.txt` must contain `{heading}` and `{body}` placeholders.
 
 ```bash
 uv run python scripts/build_obsidian_graph.py \
@@ -267,6 +292,7 @@ uv run python scripts/query_obsidian_graph.py \
 | `--semantic-min` | Min summary Jaccard to record `semantic:*` reason (default 0.15) |
 | `--semantic-weight` / `--lexical-weight` | Fusion weights when both query and fragment have summaries (0.6 / 0.4) |
 | `--llm-summary` | Summarize passage before semantic match (cache: `.llm_summary_cache/<model>.json`) |
+| `--llm-summary-prompt` / `--llm-summary-prompt-file` | Same prompt options as build |
 | `--llm-proxy` | Same as build: `auto`, `none`, or proxy URL |
 | `--llm-http-version` | `1.1` (default) or `2` |
 
