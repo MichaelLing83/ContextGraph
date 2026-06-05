@@ -138,6 +138,60 @@ def test_adaptive_greedy_merge(tmp_path: Path):
         assert f"Paragraph {i}" in merged
 
 
+def test_cap_fragment_sizes_keeps_fenced_code_block_intact():
+    from agent_memory.vault.models import VaultSection
+
+    code_inner = "def foo():\n    pass\n\ndef bar():\n    pass\n"
+    body = (
+        "Intro paragraph.\n\n"
+        f"```python\n{code_inner}```\n\n"
+        "Outro paragraph."
+    )
+    sec = VaultSection(index=0, heading="Section", body=body, level=2)
+    parts = cap_fragment_sizes([sec], max_chars=80)
+    for part in parts:
+        if "```" in part.body:
+            assert part.body.count("```") % 2 == 0
+            assert part.body.strip().startswith("```") or part.body.lstrip().startswith(
+                "Intro"
+            )
+    merged = "\n\n".join(p.body for p in parts)
+    assert "```python" in merged
+    assert "def foo():" in merged
+    assert "def bar():" in merged
+    assert merged.count("```") == 2
+
+
+def test_adaptive_mode_keeps_long_code_block_with_blank_lines(tmp_path: Path):
+    md = tmp_path / "code.md"
+    code = "\n".join(
+        [
+            "```python",
+            "def one():",
+            "    pass",
+            "",
+            "def two():",
+            "    pass",
+            "```",
+        ]
+    )
+    md.write_text(
+        "# Title\n\nBefore.\n\n" + code + "\n\nAfter.\n",
+        encoding="utf-8",
+    )
+    note = parse_vault_note(md, tmp_path)
+    sections = segment_note(
+        note, mode="adaptive", target_chars=40, max_fragment_chars=120
+    )
+    for sec in sections:
+        if "```" in sec.body:
+            assert sec.body.count("```") == 2
+            assert "def one():" in sec.body
+            assert "def two():" in sec.body
+    merged = "\n\n".join(s.body for s in sections)
+    assert merged.count("```") == 2
+
+
 def test_segment_paragraphs_when_no_headings(tmp_path: Path):
     md = tmp_path / "flat.md"
     body = "\n\n".join(f"Paragraph {i}. " + ("word " * 40) for i in range(8))

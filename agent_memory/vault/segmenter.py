@@ -65,10 +65,50 @@ def cap_fragment_sizes(
     return out
 
 
+def _split_paragraphs_respecting_fences(body: str) -> List[str]:
+    """Split on blank lines without breaking fenced ``` or ~~~ code blocks."""
+    text = body.strip()
+    if not text:
+        return []
+
+    fence_spans = _fence_block_spans(text)
+    if not fence_spans:
+        return [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+
+    parts: List[str] = []
+    last = 0
+    for match in re.finditer(r"\n\s*\n", text):
+        if _position_in_spans(match.start(), fence_spans):
+            continue
+        chunk = text[last : match.start()].strip()
+        if chunk:
+            parts.append(chunk)
+        last = match.end()
+    tail = text[last:].strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def _fence_block_spans(body: str) -> list[tuple[int, int]]:
+    """Character spans of fenced code blocks (closed blocks, then unclosed openers)."""
+    spans = [m.span() for m in _FENCE_BLOCK_RE.finditer(body)]
+    covered = {pos for start, end in spans for pos in range(start, end)}
+    opener_re = re.compile(r"(?m)^[ \t]*(```|~~~)[^\n]*$")
+    for match in opener_re.finditer(body):
+        if any(start <= match.start() < end for start, end in spans):
+            continue
+        if match.start() in covered:
+            continue
+        spans.append((match.start(), len(body)))
+    spans.sort(key=lambda span: span[0])
+    return spans
+
+
 def _split_section_by_paragraphs(
     sec: VaultSection, max_chars: int
 ) -> List[VaultSection]:
-    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", sec.body) if p.strip()]
+    paragraphs = _split_paragraphs_respecting_fences(sec.body)
     if not paragraphs:
         return [sec]
 
@@ -246,7 +286,7 @@ def _segment_by_headings_or_paragraphs(
     if not body:
         return []
 
-    fence_spans = [m.span() for m in _FENCE_BLOCK_RE.finditer(body)]
+    fence_spans = _fence_block_spans(body)
     matches = [
         m for m in _HEADING_RE.finditer(body) if not _position_in_spans(m.start(), fence_spans)
     ]
@@ -291,7 +331,7 @@ def _sections_from_paragraphs(
     *,
     preserve_markup: bool = True,
 ) -> List[VaultSection]:
-    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", body) if p.strip()]
+    paragraphs = _split_paragraphs_respecting_fences(body)
     if not paragraphs:
         return []
 
