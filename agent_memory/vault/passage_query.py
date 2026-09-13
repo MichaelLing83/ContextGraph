@@ -132,3 +132,24 @@ def _fragment_notes(index: ObsidianVaultIndex, required_tags: Set[str]):
 
 def _is_fragment(note, required_tags: Set[str]) -> bool:
     return required_tags.issubset(note.tags)
+
+
+def format_query_llm_summary_display(
+    summary: str,
+    *,
+    use_passage: bool,
+    llm_summary: bool,
+) -> tuple[str | None, str | None]:
+    """
+    Text for ``--show-query-summary``.
+
+    Returns ``(stdout, stderr)``; either may be ``None``.
+    """
+    if not use_passage:
+        return None, "Note: --show-query-summary applies only with --query-passage."
+    if not llm_summary:
+        return None, "Query LLM summary: (skipped — pass --llm-summary)"
+    text = summary.strip()
+    if not text:
+        return None, "Query LLM summary: (empty — LLM returned nothing)"
+    return f"Query LLM summary:\n{text}\n", None

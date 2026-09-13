@@ -42,7 +42,11 @@ from agent_memory.vault.fragment_summary import (  # noqa: E402
     resolve_summary_prompt,
 )
 from agent_memory.vault.obsidian_index import ObsidianVaultIndex  # noqa: E402
-from agent_memory.vault.passage_query import PassageQueryConfig, search_passage  # noqa: E402
+from agent_memory.vault.passage_query import (  # noqa: E402
+    PassageQueryConfig,
+    format_query_llm_summary_display,
+    search_passage,
+)
 from agent_memory.vault.summarize import (  # noqa: E402
     _clean_body,
     build_knowledge_summary,
@@ -166,6 +170,11 @@ def main() -> None:
     )
     add_llm_http_arguments(parser)
     add_llm_summary_prompt_arguments(parser)
+    parser.add_argument(
+        "--show-query-summary",
+        action="store_true",
+        help="Print passage LLM summary used for semantic matching (with --query-passage --llm-summary)",
+    )
     parser.add_argument("--json", action="store_true", help="JSON output")
     parser.add_argument(
         "--list-tags",
@@ -240,8 +249,8 @@ def main() -> None:
             "Provide --query and/or --tag and/or --exact-phrase, or --query-passage"
         )
 
+    query_summary = ""
     if use_passage:
-        query_summary = ""
         if args.llm_summary:
             query_summary = _summarize_passage(
                 vault,
@@ -285,6 +294,19 @@ def main() -> None:
         )
         summary_query = args.query or args.exact_phrase
 
+    def emit_query_summary() -> None:
+        if not args.show_query_summary:
+            return
+        out, err = format_query_llm_summary_display(
+            query_summary,
+            use_passage=use_passage,
+            llm_summary=args.llm_summary,
+        )
+        if err:
+            print(err, file=sys.stderr)
+        if out:
+            print(out)
+
     if args.summary or args.summary_out:
         if not hits:
             print("No matches — nothing to summarize.")
@@ -297,6 +319,7 @@ def main() -> None:
             full_body=args.full_body,
             include_meta=args.summary_meta,
         )
+        emit_query_summary()
         if args.summary_out:
             args.summary_out.expanduser().write_text(text, encoding="utf-8")
             print(f"Wrote summary to {args.summary_out}")
@@ -320,19 +343,29 @@ def main() -> None:
                 payload["body"] = _clean_body(note.body) if note else h.snippet
             return payload
 
-        print(
-            json.dumps(
-                [hit_payload(h) for h in hits],
-                indent=2,
-                ensure_ascii=False,
+        hits_payload = [hit_payload(h) for h in hits]
+        if args.show_query_summary:
+            _, err = format_query_llm_summary_display(
+                query_summary,
+                use_passage=use_passage,
+                llm_summary=args.llm_summary,
             )
-        )
+            if err:
+                print(err, file=sys.stderr)
+            payload: dict = {"hits": hits_payload}
+            if use_passage and args.llm_summary:
+                payload["query_llm_summary"] = query_summary.strip() or None
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+        else:
+            print(json.dumps(hits_payload, indent=2, ensure_ascii=False))
         return
 
     if not hits:
+        emit_query_summary()
         print("No matches.")
         return
 
+    emit_query_summary()
     mode = "passage" if use_passage else "keyword"
     print(f"Indexed {n} notes — top {len(hits)} hits ({mode})\n")
     for i, h in enumerate(hits, 1):

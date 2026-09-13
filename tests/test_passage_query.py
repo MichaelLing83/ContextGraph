@@ -3,7 +3,11 @@
 from pathlib import Path
 
 from agent_memory.vault.obsidian_index import ObsidianVaultIndex
-from agent_memory.vault.passage_query import PassageQueryConfig, search_passage
+from agent_memory.vault.passage_query import (
+    PassageQueryConfig,
+    format_query_llm_summary_display,
+    search_passage,
+)
 
 
 def _write_fragment(
@@ -122,3 +126,37 @@ def test_passage_query_hop_expansion(tmp_path: Path):
     paths = {h.rel_path for h in hits}
     assert any(p.endswith("seed.md") for p in paths)
     assert any(p.endswith("neighbor.md") for p in paths)
+
+
+def test_format_query_llm_summary_display_success():
+    out, err = format_query_llm_summary_display(
+        "cache invalidation strategies",
+        use_passage=True,
+        llm_summary=True,
+    )
+    assert err is None
+    assert out is not None
+    assert "cache invalidation strategies" in out
+    assert out.startswith("Query LLM summary:")
+
+
+def test_format_query_llm_summary_display_requires_passage_mode():
+    out, err = format_query_llm_summary_display(
+        "summary",
+        use_passage=False,
+        llm_summary=True,
+    )
+    assert out is None
+    assert err is not None
+    assert "--query-passage" in err
+
+
+def test_format_query_llm_summary_display_requires_llm_summary_flag():
+    out, err = format_query_llm_summary_display(
+        "summary",
+        use_passage=True,
+        llm_summary=False,
+    )
+    assert out is None
+    assert err is not None
+    assert "--llm-summary" in err
